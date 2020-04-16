@@ -46,6 +46,10 @@
 #include <linux/battery/sec_charging_common.h>
 #endif
 
+#if defined(CONFIG_CCIC_S2MU106) || defined(CONFIG_CCIC_S2MU107)
+#include <linux/of.h>
+#endif
+
 /* dwc3 irq storm patch */
 /* need to check dwc3 link state during dcd time out case */
 extern int dwc3_gadget_get_cmply_link_state_wrapper(void);
@@ -963,6 +967,10 @@ int manager_notifier_register(struct notifier_block *nb, notifier_fn_t notifier,
 	MANAGER_NOTI_TYPEDEF m_noti = {0, };
 	static int alternate_mode_start_wait = 0;
 	pccic_data_t pccic_data = NULL;
+#if defined(CONFIG_CCIC_S2MU106) || defined(CONFIG_CCIC_S2MU107)
+	struct device_node *np = NULL;
+	np = of_find_compatible_node(NULL, NULL, "maxim,max77705");
+#endif
 
 	pr_info("%s: listener=%d register\n", __func__, listener);
 	if(!manager_notifier_init_done)
@@ -971,6 +979,11 @@ int manager_notifier_register(struct notifier_block *nb, notifier_fn_t notifier,
 	ccic_notifier_init();
 	if(ccic_device)
 		pccic_data = dev_get_drvdata(ccic_device);
+
+#if defined(CONFIG_CCIC_S2MU106) || defined(CONFIG_CCIC_S2MU107)
+	if (!np)
+		pccic_data = NULL;
+#endif
 
 	/* Check if MANAGER Notifier is ready. */
 	if (!manager_device) {
@@ -1022,8 +1035,13 @@ int manager_notifier_register(struct notifier_block *nb, notifier_fn_t notifier,
 			m_noti.sub3, m_noti.sub1 ? "Attached": "Detached");
 		nb->notifier_call(nb, m_noti.id, &(m_noti));
 		alternate_mode_start_wait |= 0x100;
+#if !defined(CONFIG_SEC_DISPLAYPORT)
+        	if (alternate_mode_start_wait == 0x101) {
+            		pr_info("%s: USB & BATTERY driver is registered! Alternate mode Start!\n", __func__);
+#else
 		if (alternate_mode_start_wait == 0x111) {
 			pr_info("%s: USB & DP & BATTERY driver is registered! Alternate mode Start!\n", __func__);
+#endif
 #if defined(CONFIG_CCIC_ALTERNATE_MODE)
 			if (pccic_data && pccic_data->set_enable_alternate_mode)
 				pccic_data->set_enable_alternate_mode(ALTERNATE_MODE_READY | ALTERNATE_MODE_START);
@@ -1063,22 +1081,19 @@ int manager_notifier_register(struct notifier_block *nb, notifier_fn_t notifier,
 		nb->notifier_call(nb, m_noti.id, &(m_noti));
 
 		alternate_mode_start_wait |= 0x1;
+#if !defined(CONFIG_SEC_DISPLAYPORT)
+        	if (alternate_mode_start_wait == 0x101) {
+            		pr_info("%s: USB & BATTERY driver is registered! Alternate mode Start!\n", __func__);
+#else
 		if (alternate_mode_start_wait == 0x111) {
 			pr_info("%s: USB & DP & BATTERY driver is registered! Alternate mode Start!\n", __func__);
+#endif
 #if defined(CONFIG_CCIC_ALTERNATE_MODE)
 			if (pccic_data && pccic_data->set_enable_alternate_mode)
 				pccic_data->set_enable_alternate_mode(ALTERNATE_MODE_READY | ALTERNATE_MODE_START);
 #endif
 		}
-#if !defined(CONFIG_SEC_DISPLAYPORT)
-        if ((alternate_mode_start_wait & 0xF) == 0x1) {
-            pr_info("usb: [M] %s USB driver is registered! Alternate mode Start!\n", __func__);
-#if defined(CONFIG_CCIC_ALTERNATE_MODE)
-            if (pccic_data && pccic_data->set_enable_alternate_mode)
-                pccic_data->set_enable_alternate_mode(ALTERNATE_MODE_READY | ALTERNATE_MODE_START);
-#endif
-        }
-#endif
+
 		break;
 	case MANAGER_NOTIFY_CCIC_DP:
 		m_noti.src = CCIC_NOTIFY_DEV_MANAGER;

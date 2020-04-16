@@ -33,7 +33,7 @@
 #define MFC_FLASH_FW_HEX_PATH		"mfc/mfc_fw_flash.bin"
 #define MFC_FW_SDCARD_BIN_PATH		"/sdcard/mfc_fw_flash.bin"
 
-#define MFC_FW_BIN_VERSION			0x101C
+#define MFC_FW_BIN_VERSION			0x1020
 #define MFC_FLASH_FW_HEX_LSI_PATH		"mfc/mfc_fw_flash_s2miw04.bin"
 
 /* for SPU FW update */
@@ -814,8 +814,9 @@ struct mfc_charger_platform_data {
 	u32 oc_fod1;
 	u32 phone_fod_threshold;
 	u32 gear_ping_freq;
+	u32 tx_ping_freq_init;
 	int no_hv;
-	int ta_ping_freq;
+	u32 tx_conflict_curr_init;
 };
 
 #define mfc_charger_platform_data_t \
@@ -842,6 +843,7 @@ struct mfc_charger_data {
 	struct wake_lock wpc_tx_duty_min_lock;
 	struct wake_lock wpc_afc_vout_lock;
 	struct wake_lock wpc_vout_mode_lock;
+	struct wake_lock wpc_rx_connection_lock;
 	struct wake_lock wpc_rx_det_lock;
 	struct wake_lock wpc_tx_phm_lock;
 	struct wake_lock wpc_tx_id_lock;
@@ -861,7 +863,8 @@ struct mfc_charger_data {
 	struct delayed_work	wpc_fw_booting_work;
 	struct delayed_work	wpc_vout_mode_work;
 	struct delayed_work wpc_i2c_error_work;
-	struct delayed_work	wpc_rx_det_work;
+	struct delayed_work	wpc_rx_type_det_work;
+	struct delayed_work	wpc_rx_connection_work;
 	struct delayed_work wpc_tx_duty_min_work;
 	struct delayed_work wpc_tx_phm_work;
 	struct delayed_work wpc_rx_power_work;
@@ -905,5 +908,6 @@ struct mfc_charger_data {
 	unsigned long gear_start_time;
 	int input_current;
 	int duty_min;
+	int tx_gear_phm;
 };
 #endif /* __WIRELESS_CHARGER_MFC_S2MIW04_H */

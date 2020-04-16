@@ -21,6 +21,7 @@ int q6audio_get_afe_cal_validation(u16 port_id, u32 topology_id);
 /****************************************************************************/
 #define MODULE_ID_PP_SS_REC             0x10001050
 #define PARAM_ID_PP_SS_REC_GETPARAMS    0x10001052
+#define PARAM_ID_PP_SS_REC_SETPARAMS    0x1000BA30
 
 #define MODULE_ID_PP_SA                 0x10001fa0
 #define PARAM_ID_PP_SA_PARAMS           0x10001fa1
@@ -103,6 +104,10 @@ struct asm_stream_cmd_set_pp_params_dolby_atmos {
 	uint32_t enable;
 	int16_t device;
 	int16_t dolby_profile;
+} __packed;
+
+struct adm_param_interview_operating_mode {
+	uint32_t onoff;
 } __packed;
 
 /****************************************************************************/

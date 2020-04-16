@@ -65,7 +65,8 @@
 #define SEL_HBST_HAPTIC_MASK		0x02
 
 /* S2MU106_REG_OV_BK_OPTION */
-#define LRA_MODE_SET_MASK		1 << 7
+#define LRA_MODE_SET_MASK		0x80
+#define LRA_BST_MODE_SET_MASK		0x10
 
 /* S2MU106_REG_HAPTIC_MODE */
 #define LRA_MODE_EN			0x20
@@ -159,6 +160,8 @@ struct s2mu106_haptic_platform_data {
 	int normal_ratio;
 	int overdrive_ratio;
 	int folder_ratio;
+	int high_temp_ratio;
+	int temperature;
 	u16 reg2;
 	int motor_en;
 	int multi_frequency;

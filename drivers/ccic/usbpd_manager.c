@@ -114,6 +114,9 @@ void usbpd_manager_select_pdo(int num)
 		pd_noti.sink_status.selected_pdo_num = 1;
 	else
 		pd_noti.sink_status.selected_pdo_num = num;
+
+	manager->pn_flag = false;
+
 	pr_info(" %s : PDO(%d) is selected to change\n", __func__, pd_noti.sink_status.selected_pdo_num);
 
 	schedule_delayed_work(&manager->select_pdo_handler, msecs_to_jiffies(50));
@@ -190,6 +193,7 @@ int usbpd_manager_select_pps(int num, int ppsVol, int ppsCur)
 	pr_info(" %s : PPS PDO(%d), voltage(%d), current(%d) is selected to change\n",
 		__func__, pd_noti.sink_status.selected_pdo_num, ppsVol, ppsCur);
 
+	manager->pn_flag = false;
 	//schedule_delayed_work(&manager->select_pdo_handler, msecs_to_jiffies(50));
 	usbpd_manager_inform_event(pd_noti.pusbpd, MANAGER_NEW_POWER_SRC);
 
@@ -506,10 +510,10 @@ int samsung_uvdm_ready(void)
 
 	pr_info("%s\n", __func__);
 
-	if (manager->is_samsung_accessory_enter_mode)
+	if (manager->is_samsung_accessory_enter_mode && manager->pn_flag)
 		uvdm_ready = true;
 
-	pr_info("uvdm ready = %d", uvdm_ready);
+	pr_info("uvdm ready = %d, pn_flag = %d\n", uvdm_ready, manager->pn_flag);
 	return uvdm_ready;
 }
 
@@ -989,8 +993,6 @@ void usbpd_manager_plug_attach(struct device *dev, muic_attached_dev_t new_dev)
 	struct policy_data *policy = &pd_data->policy;
 	struct usbpd_manager_data *manager = &pd_data->manager;
 
-	CC_NOTI_ATTACH_TYPEDEF pd_notifier;
-
 	if (new_dev == ATTACHED_DEV_TYPE3_CHARGER_MUIC) {
 		if (policy->send_sink_cap || (manager->ps_rdy == 1 &&
 		manager->prev_available_pdo != pd_noti.sink_status.available_pdo_num)) {
@@ -1000,16 +1002,8 @@ void usbpd_manager_plug_attach(struct device *dev, muic_attached_dev_t new_dev)
 			pd_noti.event = PDIC_NOTIFY_EVENT_PD_SINK;
 		manager->ps_rdy = 1;
 		manager->prev_available_pdo = pd_noti.sink_status.available_pdo_num;
-		pd_notifier.src = CCIC_NOTIFY_DEV_CCIC;
-		pd_notifier.dest = CCIC_NOTIFY_DEV_BATTERY;
-		pd_notifier.id = CCIC_NOTIFY_ID_POWER_STATUS;
-		pd_notifier.attach = 1;
-		pd_notifier.pd = &pd_noti;
-#if defined(CONFIG_CCIC_NOTIFIER)
-		ccic_notifier_notify((CC_NOTI_TYPEDEF *)&pd_notifier, &pd_noti, 1/* pdic_attach */);
-#endif
+		pd_data->phy_ops.send_pd_info(pd_data, 1);
 	}
-
 #else
 	struct usbpd_data *pd_data = dev_get_drvdata(dev);
 	struct usbpd_manager_data *manager = &pd_data->manager;
@@ -1028,7 +1022,6 @@ void usbpd_manager_plug_detach(struct device *dev, bool notify)
 	struct usbpd_data *pd_data = dev_get_drvdata(dev);
 	struct usbpd_manager_data *manager = &pd_data->manager;
 
-	CC_NOTI_ATTACH_TYPEDEF pd_notifier;
 	pr_info("%s: usbpd plug detached\n", __func__);
 
 	usbpd_policy_reset(pd_data, PLUG_DETACHED);
@@ -1037,15 +1030,8 @@ void usbpd_manager_plug_detach(struct device *dev, bool notify)
 	manager->attached_dev = ATTACHED_DEV_NONE_MUIC;
 
 	if (pd_noti.event != PDIC_NOTIFY_EVENT_DETACH) {
-		pd_noti.event = PDIC_NOTIFY_EVENT_DETACH;		
-		pd_notifier.src = CCIC_NOTIFY_DEV_CCIC;
-		pd_notifier.dest = CCIC_NOTIFY_DEV_BATTERY;
-		pd_notifier.id = CCIC_NOTIFY_ID_POWER_STATUS;
-		pd_notifier.attach = 0;
-		pd_notifier.pd = &pd_noti;
-#if defined(CONFIG_CCIC_NOTIFIER)
-		ccic_notifier_notify((CC_NOTI_TYPEDEF *)&pd_notifier, &pd_noti, 0/* pdic_attach */);
-#endif
+		pd_noti.event = PDIC_NOTIFY_EVENT_DETACH;
+		pd_data->phy_ops.send_pd_info(pd_data, 0);
 	}
 #endif
 #endif
@@ -1710,6 +1696,7 @@ void usbpd_init_manager_val(struct usbpd_data *pd_data)
 	manager->ps_rdy = 0;
 	reinit_completion(&manager->uvdm_out_wait);
 	reinit_completion(&manager->uvdm_in_wait);
+	reinit_completion(&manager->psrdy_wait);
 	usbpd_manager_select_pdo_cancel(pd_data->dev);
 	usbpd_manager_start_discover_msg_cancel(pd_data->dev);
 }
@@ -1758,6 +1745,7 @@ int usbpd_init_manager(struct usbpd_data *pd_data)
 
 	init_completion(&manager->uvdm_out_wait);
 	init_completion(&manager->uvdm_in_wait);
+	init_completion(&manager->psrdy_wait);
 
 	usbpd_manager_register_switch_device(1);
 	init_source_cap_data(manager);
@@ -1767,7 +1755,7 @@ int usbpd_init_manager(struct usbpd_data *pd_data)
 	INIT_DELAYED_WORK(&manager->start_discover_msg_handler,
 									usbpd_manager_start_discover_msg_handler);
 
-	ret = ccic_misc_init();
+	ret = s2mu107_ccic_misc_init();
 	if (ret) {
 		pr_info("ccic misc register is failed, error %d\n", ret);
 

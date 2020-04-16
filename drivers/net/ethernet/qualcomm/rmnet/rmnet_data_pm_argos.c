@@ -27,7 +27,7 @@
  *
  * pm qos threshold : 10 Mbps
  * tx aggre threshold : 100 Mbps
- * ipa napi chained rx threshold : 100 Mbps
+ * ipa napi chained rx threshold : 200 Mbps
  * big core boot threshold : 300 Mbps
  *
  *  ------------------------------- default ---------------------------
@@ -37,7 +37,7 @@
  *  10		0d	2	disable		enable	disable
  *  30		0d	2	disable		enable	disable
  *  60		0d	2	disable		enable	disable
- *  100		0d	5	enable		enable	enable
+ *  100		0d	5	disable		enable	enable
  *  200		0d	5	enable		enable	enable
  *  300		c0	0(max)	enable		enable	enable
  *
@@ -74,7 +74,7 @@ MODULE_PARM_DESC(rmnet_tx_aggr_mbps, "TX aggr Threshold");
 bool rmnet_data_tx_aggr_enabled;
 
 /* ipa napi chained rx */
-#define ARGOS_RMNET_IPA_NAPI_CHAIN_MBPS 100
+#define ARGOS_RMNET_IPA_NAPI_CHAIN_MBPS 200
 static unsigned int rmnet_ipa_napi_chain_mbps = ARGOS_RMNET_IPA_NAPI_CHAIN_MBPS;
 module_param(rmnet_ipa_napi_chain_mbps, uint, 0644);
 MODULE_PARM_DESC(rmnet_ipa_napi_chain_mbps, "IPA NAPI chained rx Threshold");

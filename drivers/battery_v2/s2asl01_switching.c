@@ -356,14 +356,18 @@ static void s2asl01_set_fast_charging_current_limit(
 		else
 			data = 0x3F;
 	} else {
-		if (charging_current <= 50)
+		if (charging_current <= 50) {
 			data = 0x00;
-		else if (charging_current > 50 && charging_current <= 350)
+		} else if (charging_current > 50 && charging_current <= 350) {
 			data = (charging_current - 50) / 75;
-		else if (charging_current > 350 && charging_current <= 3300)
+			data += 2;
+			if (data > 4)
+				data = 0x04;
+		} else if (charging_current > 350 && charging_current <= 3300) {
 			data = ((charging_current - 350) / 50) + 4;
-		else
+		} else {
 			data = 0x3F;
+		}
 	}
 
 	pr_info("%s [%s]: current %d, 0x%02x\n",

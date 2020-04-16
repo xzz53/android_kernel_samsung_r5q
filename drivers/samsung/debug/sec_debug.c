@@ -495,6 +495,7 @@ struct __upload_cause upload_cause_st[] = {
 	{ "npu", UPLOAD_CAUSE_NPU_ERROR_FATAL, SEC_STRNSTR },
 	{ "cdsp", UPLOAD_CAUSE_CDSP_ERROR_FATAL, SEC_STRNSTR },
 	{ "MDM Crash", UPLOAD_CAUSE_MDM_ERROR_FATAL, SEC_STRNCMP },
+	{ "unrecoverable external_modem", UPLOAD_CAUSE_MDM_CRITICAL_FATAL, SEC_STRNSTR },
 	{ "external_modem", UPLOAD_CAUSE_MDM_ERROR_FATAL, SEC_STRNSTR },
 	{ "esoc0 crashed", UPLOAD_CAUSE_MDM_ERROR_FATAL, SEC_STRNSTR },
 	{ "modem", UPLOAD_CAUSE_MODEM_RST_ERR, SEC_STRNSTR },
@@ -601,10 +602,9 @@ static int sec_debug_panic_handler(struct notifier_block *nb,
 	/* enable after SSR feature */
 	/* ssr_panic_handler_for_sec_dbg(); */
 
-	show_state_filter(TASK_UNINTERRUPTIBLE);
-
 	/* platform lockup suspected, it needs more info */
 	if (sec_debug_platform_lockup_suspected((char *)buf)) {
+		show_state_filter(TASK_UNINTERRUPTIBLE);
 		dump_memory_info();
 		dump_cpu_stat();
 	}

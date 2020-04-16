@@ -74,12 +74,16 @@ struct sdump_data *pdata_sdump;
 extern bool is_pretest(void);
 #endif
 
+static unsigned int sec_hw_rev(void);
+
 #ifdef CONFIG_SUPPORT_AK0997X
+#define SUPPORT_ANALOG_HALL (5)
 struct ak09970_digital_hall_data {
 	int32_t ref_x[19];
 	int32_t ref_y[19];
 	int32_t ref_z[19];
 	int32_t flg_update;
+	bool support_a_hall;
 };
 static struct ak09970_digital_hall_data *pdata;
 
@@ -94,6 +98,7 @@ void init_digital_hall_data()
 	}
 
 	pdata->flg_update = 0;
+	pdata->support_a_hall = true;
 }
 
 int set_digital_hall_auto_cal_data(bool first_booting)
@@ -230,6 +235,9 @@ void digital_hall_factory_auto_cal_init_work(void)
 	int buf[58] = { 0, };
 	char *auto_cal_buf = kzalloc(AUTO_CAL_FILE_BUF_LEN * sizeof(char),
 		GFP_KERNEL);
+
+	if (sec_hw_rev() < SUPPORT_ANALOG_HALL)
+		pdata->support_a_hall = false;
 
 	/* auto_cal X */
 	old_fs = get_fs();
@@ -388,6 +396,16 @@ void digital_hall_factory_auto_cal_init_work(void)
  * send ssr notice to ois mcu
  */
 #define NO_OIS_STRUCT (-1)
+
+#if defined(CONFIG_SUPPORT_DEVICE_MODE) && defined(CONFIG_SUPPORT_DUAL_OPTIC)
+struct ssc_flip_data {
+	struct workqueue_struct *ssc_flip_wq;
+	struct work_struct work_ssc_flip;
+	bool is_opend;
+	bool only_update;
+};
+struct ssc_flip_data *pdata_ssc_flip;
+#endif
 
 struct ois_sensor_interface{
 	void *core;
@@ -549,12 +567,6 @@ static ssize_t mode_store(struct device *dev,
 
 	if (data != 1) {
 		pr_err("[FACTORY] %s: data was wrong\n", __func__);
-
-		if (data == 44) {
-		    pr_err("[FACTORY] %s: forced crash!!!\n", __func__);
-		    panic("Sensors are not attached!!");
-		}
-
 		return -EINVAL;
 	}
 
@@ -756,6 +768,30 @@ static ssize_t support_algo_store(struct device *dev,
 }
 
 #ifdef CONFIG_SUPPORT_DEVICE_MODE
+#ifdef CONFIG_SUPPORT_DUAL_OPTIC
+void ssc_flip_work_func(struct work_struct *work)
+{
+	int32_t msg_buf[2];
+	if (pdata_ssc_flip->only_update) {
+		msg_buf[0] = VOPTIC_OP_CMD_SSC_FLIP_UPDATE;
+		pdata_ssc_flip->only_update = false;
+	} else {
+		msg_buf[0] = VOPTIC_OP_CMD_SSC_FLIP;
+	}
+	msg_buf[1] = (int32_t)curr_fstate;
+	pr_info("[FACTORY] %s: msg_buf = %d\n", __func__, msg_buf[1]);
+	adsp_unicast(msg_buf, sizeof(msg_buf),
+			MSG_VIR_OPTIC, 0, MSG_TYPE_OPTION_DEFINE);
+}
+
+void sns_flip_init_work(void)
+{
+	pr_info("sns_flip_init_work:%d \n", (int)curr_fstate);
+	queue_work(pdata_ssc_flip->ssc_flip_wq,
+		&pdata_ssc_flip->work_ssc_flip);
+}
+#endif
+
 int sns_device_mode_notify(struct notifier_block *nb,
 	unsigned long flip_state, void *v)
 {
@@ -773,6 +809,10 @@ int sns_device_mode_notify(struct notifier_block *nb,
 	else
 		adsp_unicast(NULL, 0, MSG_SSC_CORE, 0, MSG_TYPE_FACTORY_DISABLE);
 
+#ifdef CONFIG_SUPPORT_DUAL_OPTIC
+        // send the flip state by qmi.
+	queue_work(pdata_ssc_flip->ssc_flip_wq, &pdata_ssc_flip->work_ssc_flip);
+#endif
 	return 0;
 }
 
@@ -790,21 +830,31 @@ static ssize_t fac_fstate_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t size)
 {
 	struct adsp_data *data = dev_get_drvdata(dev);
-	int32_t fstate[1] = {0};
+	int32_t fstate[2] = {VOPTIC_OP_CMD_FAC_FLIP, 0};
 	
 	if (sysfs_streq(buf, "0"))
-		data->fac_fstate = fstate[0] = curr_fstate;
+		data->fac_fstate = fstate[1] = curr_fstate;
 	else if (sysfs_streq(buf, "1"))
-		data->fac_fstate = fstate[0] = FSTATE_FAC_INACTIVE;
+		data->fac_fstate = fstate[1] = FSTATE_FAC_INACTIVE;
 	else if (sysfs_streq(buf, "2"))
-		data->fac_fstate = fstate[0] = FSTATE_FAC_ACTIVE;
+		data->fac_fstate = fstate[1] = FSTATE_FAC_ACTIVE;
 	else
-		data->fac_fstate = fstate[0] = curr_fstate;
+		data->fac_fstate = fstate[1] = curr_fstate;
 
 	adsp_unicast(fstate, sizeof(fstate),
 		MSG_VIR_OPTIC, 0, MSG_TYPE_OPTION_DEFINE);
 	pr_info("[FACTORY] %s - Factory flip state:%d",
 		__func__, fstate[0]);
+
+	return size;
+}
+
+static ssize_t update_ssc_flip_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t size)
+{
+	pdata_ssc_flip->only_update = true;
+	queue_work(pdata_ssc_flip->ssc_flip_wq, &pdata_ssc_flip->work_ssc_flip);
+	pr_info("[FACTORY] %s",	__func__);
 
 	return size;
 }
@@ -850,7 +900,7 @@ static ssize_t lcd_onoff_store(struct device *dev,
 	mutex_unlock(&data->light_factory_mutex);
 #endif
 #ifdef CONFIG_SUPPORT_AK0997X
-	if (new_value) {
+	if (new_value && !pdata->support_a_hall) {
 		adsp_unicast(NULL, 0, MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_GET_CAL_DATA);
 
 		while (!(data->ready_flag[MSG_TYPE_GET_CAL_DATA] & 1 << MSG_DIGITAL_HALL_ANGLE) &&
@@ -993,6 +1043,22 @@ void sensor_dump_work_func(struct work_struct *work)
 #endif
 	int i, cnt;
 
+#ifdef CONFIG_SUPPORT_AK0997X
+	adsp_unicast(NULL, 0, MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_GET_CAL_DATA);
+
+	while (!(data->ready_flag[MSG_TYPE_GET_CAL_DATA] & 1 << MSG_DIGITAL_HALL_ANGLE) &&
+		cnt++ < 3)
+		msleep(30);
+
+	data->ready_flag[MSG_TYPE_GET_CAL_DATA] &= ~(1 << MSG_DIGITAL_HALL_ANGLE);
+
+	if (cnt >= 3) {
+		pr_err("[FACTORY] %s: Read D/Hall Auto Cal Table Timeout!!!\n", __func__);
+	}
+
+	pr_info("[FACTORY] %s: flg_update=%d\n", __func__, data->msg_buf[MSG_DIGITAL_HALL_ANGLE][0]);
+#endif
+
 	for (i = 0; i < SENSOR_DUMP_CNT; i++) {
 		if (!data->sysfs_created[sensor_type[i]]) {
 			pr_info("[FACTORY] %s: %d was not probed\n",
@@ -1098,6 +1164,7 @@ static DEVICE_ATTR(ssr_reset, 0440, ssr_reset_show, NULL);
 static DEVICE_ATTR(support_algo, 0220, NULL, support_algo_store);
 #ifdef CONFIG_SUPPORT_VIRTUAL_OPTIC
 static DEVICE_ATTR(fac_fstate, 0220, NULL, fac_fstate_store);
+static DEVICE_ATTR(update_ssc_flip, 0220, NULL, update_ssc_flip_store);
 #endif
 static DEVICE_ATTR(support_dual_sensor, 0440, support_dual_sensor_show, NULL);
 static DEVICE_ATTR(abs_lcd_onoff, 0220, NULL, abs_lcd_onoff_store);
@@ -1124,6 +1191,7 @@ static struct device_attribute *core_attrs[] = {
 	&dev_attr_support_algo,
 #ifdef CONFIG_SUPPORT_VIRTUAL_OPTIC	
 	&dev_attr_fac_fstate,
+	&dev_attr_update_ssc_flip,
 #endif
 	&dev_attr_support_dual_sensor,
 	&dev_attr_abs_lcd_onoff,
@@ -1209,6 +1277,22 @@ static int __init core_factory_init(void)
 #else
 	adsp_factory_register(MSG_SSC_CORE, core_attrs);
 #endif
+
+#if defined(CONFIG_SUPPORT_DEVICE_MODE) && defined(CONFIG_SUPPORT_DUAL_OPTIC)
+	pdata_ssc_flip = kzalloc(sizeof(*pdata_ssc_flip), GFP_KERNEL);
+	if (pdata_ssc_flip == NULL)
+		return -ENOMEM;
+
+	pdata_ssc_flip->ssc_flip_wq =
+		create_singlethread_workqueue("ssc_flip_wq");
+	if (pdata_ssc_flip->ssc_flip_wq == NULL) {
+		pr_err("[FACTORY]: %s - couldn't create ssc charge wq\n", __func__);
+		kfree(pdata_ssc_flip);
+		return -ENOMEM;
+	}
+	INIT_WORK(&pdata_ssc_flip->work_ssc_flip, ssc_flip_work_func);
+#endif	
+
 #ifdef CONFIG_SUPPORT_SSC_MODE
 	platform_driver_register(&ssc_core_driver);
 #endif
@@ -1243,6 +1327,15 @@ static void __exit core_factory_exit(void)
 #else
 	adsp_factory_unregister(MSG_SSC_CORE);
 #endif
+
+#if defined(CONFIG_SUPPORT_DEVICE_MODE) && defined(CONFIG_SUPPORT_DUAL_OPTIC)
+	if (pdata_ssc_flip != NULL && pdata_ssc_flip->ssc_flip_wq != NULL) {
+		cancel_work_sync(&pdata_ssc_flip->work_ssc_flip);
+		destroy_workqueue(pdata_ssc_flip->ssc_flip_wq);
+		pdata_ssc_flip->ssc_flip_wq = NULL;
+	}
+#endif
+
 #ifdef CONFIG_SUPPORT_SSC_MODE
 	platform_driver_unregister(&ssc_core_driver);
 #endif

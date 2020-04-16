@@ -486,6 +486,16 @@ static int ss_spi_probe(struct spi_device *client)
 	vdd->spi_dev = client;
 	dev_set_drvdata(&client->dev, vdd);
 
+	if (vdd->dtsi_data.flash_gamma_support && 
+		!vdd->panel_br_info.flash_data.init_done &&
+		!strcmp(vdd->dtsi_data.flash_read_intf, "spi") ) {
+		if (vdd->spi_no_dev && !work_busy(&vdd->flash_br_work.work)) {
+			queue_delayed_work(vdd->flash_br_workqueue, &vdd->flash_br_work,
+				msecs_to_jiffies(0));
+			LCD_ERR("Queue flash work again.\n");
+		}
+	}
+
 	LCD_ERR("%s : --\n", __func__);
 	return ret;
 }

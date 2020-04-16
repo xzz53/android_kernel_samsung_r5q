@@ -149,9 +149,6 @@ static void regmode_vote(struct s2mu106_charger_data *charger, int voter, int va
 
 	if ((set_val & REG_MODE_OTG_TX) && (set_val & REG_MODE_BUCK)) {
 		if (set_val & REG_MODE_OTG) {
-#if defined(CONFIG_WIRELESS_CHARGER_MFC_S2MIW04)
-			union power_supply_propval value = {0,};
-#endif
 			pr_info("%s: OTG_BUCK\n", __func__);
 			if ((reg & REG_MODE_OTG) && !(reg & REG_MODE_BUCK)) {
 				msleep(200);
@@ -166,12 +163,6 @@ static void regmode_vote(struct s2mu106_charger_data *charger, int voter, int va
 				s2mu106_update_reg(charger->i2c, 0x30, 0x04, 0x0C); // OTG PATH OFF
 				enable_irq(charger->irq_otg);
 			}
-#if defined(CONFIG_WIRELESS_CHARGER_MFC_S2MIW04)
-			/* wireless(otg) -> wirless + otg */
-			value.intval = 1;
-			psy_do_property(charger->pdata->wireless_charger_name, set,
-					POWER_SUPPLY_EXT_PROP_WIRELESS_TXMODE_DISCON, value);
-#endif
 		} else if (set_val & REG_MODE_TX) {
 			pr_info("%s: TX_BUCK\n", __func__);
 			if ((reg & REG_MODE_TX) && !(reg & REG_MODE_BUCK)) {
@@ -304,11 +295,6 @@ static int s2mu106_charger_otg_control(
 		s2mu106_update_reg(charger->i2c, 0x94, 0x08, 0x0C);
 		psy_do_property("wireless", set,
 			POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL, value);
-#if defined(CONFIG_WIRELESS_CHARGER_MFC_S2MIW04)
-		/* wireless + otg -> wireless */
-		psy_do_property(charger->pdata->wireless_charger_name, set,
-				POWER_SUPPLY_EXT_PROP_WIRELESS_TXMODE_DISCON, value);
-#endif
 	} else {
 		psy_do_property("wireless", set,
 			POWER_SUPPLY_PROP_CHARGE_OTG_CONTROL, value);
@@ -1058,6 +1044,8 @@ static void s2mu106_set_uno(struct s2mu106_charger_data *charger, int en)
 	}
 
 	if (en == SEC_BAT_CHG_MODE_UNO_ONLY) { /* this case, buck should be off */
+		/* OTG Fault debounce time set 100us */
+		s2mu106_update_reg(charger->i2c, 0x94, 0x08, 0x0C);
 		/* OTG OCP 1200mA, TX OCP 1500mA */
 		s2mu106_update_reg(charger->i2c, S2MU106_CHG_CTRL3,
 				(S2MU106_SET_OTG_TX_OCP_1500mA << SET_TX_OCP_SHIFT),
@@ -1071,6 +1059,8 @@ static void s2mu106_set_uno(struct s2mu106_charger_data *charger, int en)
 			regmode_vote(charger, REG_MODE_TX|REG_MODE_BUCK, REG_MODE_TX);
 		}
 	} else if (en) {
+		/* OTG Fault debounce time set 100us */
+		s2mu106_update_reg(charger->i2c, 0x94, 0x08, 0x0C);
 		/* OTG OCP 1200mA, TX OCP 1500mA */
 		s2mu106_update_reg(charger->i2c, S2MU106_CHG_CTRL3,
 				(S2MU106_SET_OTG_TX_OCP_1500mA << SET_TX_OCP_SHIFT),

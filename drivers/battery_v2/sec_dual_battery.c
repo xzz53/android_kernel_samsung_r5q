@@ -291,6 +291,13 @@ static int sec_dual_battery_set_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_MAX ... POWER_SUPPLY_EXT_PROP_MAX:
 		switch (ext_psp) {
+		case POWER_SUPPLY_EXT_PROP_FULL_CONDITION:
+			battery->pdata->main_full_condition_vcell = val->intval;
+			battery->pdata->sub_full_condition_vcell = val->intval;
+			pr_info("%s : main_full_condition_vcell(%d), sub_full_condition_vcell(%d)\n", __func__,
+				battery->pdata->main_full_condition_vcell,
+				battery->pdata->sub_full_condition_vcell);
+			break;
 		default:
 			return -EINVAL;
 		}

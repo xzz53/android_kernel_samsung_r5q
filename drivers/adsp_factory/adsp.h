@@ -162,6 +162,9 @@ void sub_accel_factory_init_work(void);
 #endif
 #ifdef CONFIG_SUPPORT_DEVICE_MODE
 void sns_device_mode_init_work(void);
+#ifdef CONFIG_SUPPORT_DUAL_OPTIC
+void sns_flip_init_work(void);
+#endif
 #endif
 #ifdef CONFIG_SUPPORT_BHL_COMPENSATION_FOR_LIGHT_SENSOR
 void light_factory_init_work(struct adsp_data *data);

@@ -310,7 +310,9 @@ struct cmd_map {
 	int *cmd_idx;
 	int size;
 };
-
+/* To support model which is not using one to one (platform level - cd level) match such as BLOOM, 
+  made MULTI_TO_ONE_NORMAL table to make set_normal_br_values use this when calc cd_level & cd index
+ */
 enum CD_MAP_TABLE_LIST {
 	NORMAL,
 	PAC_NORMAL,
@@ -319,6 +321,7 @@ enum CD_MAP_TABLE_LIST {
 	AOD,
 	HMT,
 	GAMMA_MODE2_NORMAL,
+	MULTI_TO_ONE_NORMAL,
 	CD_MAP_TABLE_MAX,
 };
 
@@ -400,6 +403,7 @@ struct samsung_display_dtsi_data {
 
 	struct cmd_map hmt_reverse_aid_map_table[SUPPORT_PANEL_REVISION];
 
+	bool disp_en_gpio_use;
 	bool panel_lpm_enable;
 	bool hmt_enabled;
 
@@ -482,6 +486,8 @@ struct samsung_display_dtsi_data {
 	/*
 	 *	Flash gamma feature end
 	*/
+	/* Physical data lanes to be enabled */
+	int num_of_data_lanes;
 };
 
 struct display_status {
@@ -962,6 +968,7 @@ struct brightness_info {
 	int interpolation_cd;
 	int gamma_mode2_cd;
 	int gamma_mode2_support;
+	int multi_to_one_support;
 
 	/* SAMSUNG_FINGERPRINT */
 	int finger_mask_bl_level;
@@ -1294,6 +1301,7 @@ struct samsung_display_driver_data {
 	struct ss_interpolation flash_itp;
 	struct ss_interpolation table_itp;
 	int table_interpolation_loaded;
+	bool spi_no_dev;
 
 	/*
 	 * Brightness
@@ -1341,6 +1349,9 @@ struct samsung_display_driver_data {
 	bool samsung_enable_splash_pba;
 
 	char window_color[2];
+
+	/* force white flush to support the model can not execute gallery. */
+	int force_white_flush;
 };
 
 extern struct list_head vdds_list;

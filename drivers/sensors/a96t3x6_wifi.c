@@ -297,6 +297,9 @@ static void a96t3x6_set_enable(struct a96t3x6_data *data, int enable)
 
 static void a96t3x6_sar_only_mode(struct a96t3x6_data *data, int on)
 {
+#ifdef CONFIG_SENSORS_A96T3X6_BLOCK_SAR_ONLY
+	GRIP_INFO("No action with sar only mode");
+#else
 	int ret;
 	u8 cmd;
 	u8 r_buf;
@@ -330,6 +333,7 @@ static void a96t3x6_sar_only_mode(struct a96t3x6_data *data, int on)
 		else
 			data->sar_mode = 0;
 	}
+#endif
 }
 
 static void grip_always_active(struct a96t3x6_data *data, int on)

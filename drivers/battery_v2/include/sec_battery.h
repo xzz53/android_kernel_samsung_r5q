@@ -97,6 +97,7 @@ extern char *sec_cable_type[];
 #define SEC_BAT_CURRENT_EVENT_SIOP_LIMIT		0x800000
 #define SEC_BAT_CURRENT_EVENT_TEMP_CTRL_TEST	0x1000000
 #define SEC_BAT_CURRENT_EVENT_25W_OCP			0x2000000
+#define SEC_BAT_CURRENT_EVENT_SEND_UVDM			0x8000000
 
 /* misc_event */
 #define BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE	0x00000001
@@ -614,6 +615,7 @@ struct sec_battery_info {
 #endif
 	int batt_asoc;
 #if defined(CONFIG_STEP_CHARGING)
+	bool step_charging_skip_lcd_on;
 	unsigned int step_charging_type;
 	unsigned int step_charging_charge_power;
 	int step_charging_status;
@@ -664,6 +666,7 @@ struct sec_battery_info {
 	int ta_alert_mode;
 
 	bool boot_complete;
+	int raw_bat_temp;
 #if defined(CONFIG_ENG_BATTERY_CONCEPT)
 	char * get_dt_str;
 #endif

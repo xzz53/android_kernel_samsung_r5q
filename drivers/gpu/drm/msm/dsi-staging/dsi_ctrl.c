@@ -1369,7 +1369,12 @@ kickoff:
 						DSI_SINT_CMD_MODE_DMA_DONE);
 				pr_err("[DSI_%d]Command transfer failed\n",
 						dsi_ctrl->cell_index);
-				err_flag = 1;
+				/* 
+				*  when we remove panic on tx_timeout we need to make err_flag 0 
+				*  otherwise it will make crtc_commit thread to be in a while loop
+				*  complete_commit(struct msm_commit *c) if (err_flag) { while (1) msleep(20);
+				*/
+				err_flag = 0;
 				SDE_EVT32(0xbad, 0x1);
 #if defined(CONFIG_DISPLAY_SAMSUNG)
 				/* check physical display connection */
@@ -1380,7 +1385,12 @@ kickoff:
 				}
 #endif
 
-#if 1 // case 03745287
+/* 
+*  when we remove panic on tx_timeout we need to make err_flag 0
+*  otherwise it will make crtc_commit thread to be in a while loop
+*  complete_commit(struct msm_commit *c) if (err_flag) { while (1) msleep(20);
+*/
+#if 0 // case 03745287
 				if (!dsi_ctrl->esd_check_underway) {
 					/* For retry rx operation */
 					if (!msg->rx_len)
@@ -2473,8 +2483,6 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 	/* DSI FIFO UNDERFLOW error */
 	if (error & 0xF00000) {
 		pr_err("dsi FIFO UNDERFLOW error: 0x%lx\n", error);
-		SDE_DBG_DUMP_WQ("sde", "dsi0_ctrl", "dsi0_phy", "dsi1_ctrl", "dsi1_phy",
-			"vbif", "dbg_bus","dsi_dbg_bus", "vbif_dbg_bus", "panic");
 		if (cb_info.event_cb) {
 			cb_info.event_idx = DSI_FIFO_UNDERFLOW;
 			(void)cb_info.event_cb(cb_info.event_usr_ptr,

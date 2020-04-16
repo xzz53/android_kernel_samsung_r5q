@@ -79,6 +79,9 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 	int bl_lvl;
 	struct drm_event event;
 	int rc = 0;
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd;
+#endif
 
 	brightness = bd->props.brightness;
 
@@ -98,7 +101,14 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 
 	if (!bl_lvl && brightness)
 		bl_lvl = 1;
-
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	vdd = display->panel->panel_private;
+	if((bd->props.power == FB_BLANK_POWERDOWN) && (vdd->dtsi_data.num_of_data_lanes == 1)) {	
+		c_conn->unset_bl_level = bl_lvl;
+		SDE_ERROR("SKIP set_backlight at FB_BLANK_POWERDOWN state\n");
+		return -EINVAL;
+	}
+#endif
 	if (display->panel->bl_config.bl_update ==
 		BL_UPDATE_DELAY_UNTIL_FIRST_FRAME && !c_conn->allow_bl_update) {
 		c_conn->unset_bl_level = bl_lvl;

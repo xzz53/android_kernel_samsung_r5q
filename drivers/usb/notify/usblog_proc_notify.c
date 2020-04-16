@@ -223,12 +223,10 @@ static const char *ccic_id_string(enum ccic_id id)
 		return "ID_WATER";
 	case NOTIFY_ID_VCONN:
 		return "ID_VCONN";
-#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106) || defined(CONFIG_CCIC_S2MU106)
 	case NOTIFY_ID_OTG:
 		return "ID_OTG";
 	case NOTIFY_ID_TA:
 		return "ID_TA";
-#endif
 	case NOTIFY_ID_DP_CONNECT:
 		return "ID_DP_CONNECT";
 	case NOTIFY_ID_DP_HPD:
@@ -487,7 +485,6 @@ static void print_ccic_event(struct seq_file *m, unsigned long long ts,
 			ccic_id_string(type.id),
 			ccic_dev_string(type.src),
 			ccic_dev_string(type.dest));
-#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106) || defined(CONFIG_CCIC_S2MU106)
 		else if (type.id  == NOTIFY_ID_OTG)
 			seq_printf(m, "[%5lu.%06lu] ccic notify:    id=%s src=%s dest=%s rprd=%s %s\n",
 			(unsigned long)ts, rem_nsec / 1000,
@@ -504,7 +501,6 @@ static void print_ccic_event(struct seq_file *m, unsigned long long ts,
 			ccic_dev_string(type.dest),
 			ccic_rprd_string(type.sub2),
 			ccic_con_string(type.sub1));
-#endif
 		else if (type.id  == NOTIFY_ID_DP_CONNECT)
 			seq_printf(m, "[%5lu.%06lu] ccic notify:    id=%s src=%s dest=%s 0x%04x/0x%04x %s\n",
 			(unsigned long)ts, rem_nsec / 1000,
@@ -630,7 +626,6 @@ static void print_ccic_event(struct seq_file *m, unsigned long long ts,
 			ccic_id_string(type.id),
 			ccic_dev_string(type.src),
 			ccic_dev_string(type.dest));
-#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106) || defined(CONFIG_CCIC_S2MU106)
 		else if (type.id  == NOTIFY_ID_OTG)
 			seq_printf(m, "[%5lu.%06lu] manager notify: id=%s src=%s dest=%s rprd=%s %s\n",
 			(unsigned long)ts, rem_nsec / 1000,
@@ -647,7 +642,6 @@ static void print_ccic_event(struct seq_file *m, unsigned long long ts,
 			ccic_dev_string(type.dest),
 			ccic_rprd_string(type.sub2),
 			ccic_con_string(type.sub1));
-#endif
 		else if (type.id  == NOTIFY_ID_DP_CONNECT)
 			seq_printf(m, "[%5lu.%06lu] manager notify: id=%s src=%s dest=%s 0x%04x/0x%04x %s\n",
 			(unsigned long)ts, rem_nsec / 1000,

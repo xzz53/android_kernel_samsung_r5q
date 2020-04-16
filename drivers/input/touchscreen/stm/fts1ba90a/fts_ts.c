@@ -1731,8 +1731,6 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 			}
 
 			info->finger[TouchID].prev_ttype = info->finger[TouchID].ttype;
-			info->finger[TouchID].p_x = info->finger[TouchID].x;
-			info->finger[TouchID].p_y = info->finger[TouchID].y;
 			prev_action = info->finger[TouchID].action;
 			info->finger[TouchID].id = TouchID;
 			info->finger[TouchID].action = p_event_coord->tchsta;
@@ -1808,6 +1806,9 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 					info->touch_count++;
 					info->all_finger_count++;
 
+					info->finger[TouchID].p_x = info->finger[TouchID].x;
+					info->finger[TouchID].p_y = info->finger[TouchID].y;
+
 					input_mt_slot(info->input_dev, TouchID);
 					input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 1);
 					input_report_key(info->input_dev, BTN_TOUCH, 1);
@@ -1848,7 +1849,7 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 							location, info->touch_count);
 #else
 					input_info(true, &info->client->dev,
-							"[P] tID:%d.%d z:%d major:%d loc:%s monor:%d tc:%d\n",
+							"[P] tID:%d.%d z:%d major:%d minor:%d loc:%s tc:%d\n",
 							TouchID, (info->input_dev->mt->trkid - 1) & TRKID_MAX,
 							info->finger[TouchID].z,
 							info->finger[TouchID].major, info->finger[TouchID].minor,
@@ -1951,9 +1952,9 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 						input_sync(info->input_dev);
 						input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 0);
 					} else if (p_gesture_status->gesture_id == FTS_SPONGE_EVENT_GESTURE_ID_DOUBLETAP_TO_WAKEUP) {
-						input_report_key(info->input_dev, KEY_HOMEPAGE, 1);
+						input_report_key(info->input_dev, KEY_WAKEUP, 1);
 						input_sync(info->input_dev);
-						input_report_key(info->input_dev, KEY_HOMEPAGE, 0);
+						input_report_key(info->input_dev, KEY_WAKEUP, 0);
 						input_info(true, &info->client->dev, "%s: DOUBLE TAP TO WAKEUP\n", __func__);
 					}
 					break;
@@ -2639,7 +2640,7 @@ static void fts_set_input_prop(struct fts_ts_info *info, struct input_dev *dev, 
 	set_bit(BTN_TOUCH, dev->keybit);
 	set_bit(BTN_TOOL_FINGER, dev->keybit);
 	set_bit(KEY_BLACK_UI_GESTURE, dev->keybit);
-	set_bit(KEY_HOMEPAGE, dev->keybit);
+	set_bit(KEY_WAKEUP, dev->keybit);
 
 #ifdef FTS_SUPPORT_TOUCH_KEY
 	if (info->board->support_mskey) {
@@ -3246,8 +3247,6 @@ void fts_release_all_finger(struct fts_ts_info *info)
 
 	input_report_key(info->input_dev, BTN_TOUCH, 0);
 	input_report_key(info->input_dev, BTN_TOOL_FINGER, 0);
-
-	input_report_key(info->input_dev, KEY_HOMEPAGE, 0);
 
 	if (info->board->support_sidegesture) {
 		input_report_key(info->input_dev, KEY_SIDE_GESTURE, 0);

@@ -869,6 +869,13 @@ struct cpufreq_limit_list_t cpufreq_limit_list[] = {
 		.handle = NULL,
 		.id_mask = DVFS_ARGOS_ID_MASK
 	},
+#ifdef CONFIG_USB_AUDIO_ENHANCED_DETECT_TIME
+	{
+		.name = "boost-host min",
+		.handle = NULL,
+		.id_mask = DVFS_BOOST_HOST_ID_MASK
+	},
+#endif
 };
 
 int set_freq_limit(unsigned long id, unsigned int freq)
@@ -1017,7 +1024,11 @@ power_attr_ro(rtc_status);
 static char fota_limit_str[] =
 #if defined(CONFIG_ARCH_SM8150)
 	"[START]\n"
+#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
+	"/sys/power/cpufreq_max_limit 1171200\n"
+#else
 	"/sys/power/cpufreq_max_limit 1497600\n"
+#endif
 	"[STOP]\n"
 	"/sys/power/cpufreq_max_limit -1\n"
 	"[END]\n";

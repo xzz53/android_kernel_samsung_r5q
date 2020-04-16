@@ -60,7 +60,7 @@ static void max77705_chg_set_mode_state(struct max77705_charger_data *charger,
 static void max77705_set_switching_frequency(struct max77705_charger_data *charger,
 					int frequency);
 
-static int is_wcin_port()
+static int is_wcin_port(struct max77705_charger_data *charger)
 {
 	int ret = false;
 #if defined(CONFIG_BATTERY_SAMSUNG_MHS)
@@ -68,6 +68,11 @@ static int is_wcin_port()
 
 	psy_do_property("battery", get, POWER_SUPPLY_EXT_PROP_CHARGE_PORT, value);
 	if (value.intval == MAIN_PORT)
+		ret = true;
+#endif
+
+#if defined(CONFIG_USE_POGO)
+	if (charger->cable_type == SEC_BATTERY_CABLE_POGO)
 		ret = true;
 #endif
 	return ret;
@@ -137,7 +142,7 @@ static int max77705_get_vbus_state(struct max77705_charger_data *charger)
 
 	max77705_read_reg(charger->i2c, MAX77705_CHG_REG_DETAILS_00, &reg_data);
 
-	if (is_wireless_type(charger->cable_type) || is_wcin_port())
+	if (is_wireless_type(charger->cable_type) || is_wcin_port(charger))
 		reg_data = ((reg_data & MAX77705_WCIN_DTLS) >>
 			    MAX77705_WCIN_DTLS_SHIFT);
 	else
@@ -296,7 +301,7 @@ static int max77705_get_charging_health(struct max77705_charger_data *charger)
 	int state = POWER_SUPPLY_HEALTH_GOOD;
 	int vbus_state, retry_cnt;
 	u8 chg_dtls, reg_data, chg_cnfg_00;
-	bool wdt_status;	
+	bool wdt_status, unormal_status = false;
 
 	/* watchdog kick */
 	max77705_chg_set_wdtmr_kick(charger);
@@ -360,6 +365,8 @@ static int max77705_get_charging_health(struct max77705_charger_data *charger)
 		max77705_chg_set_mode_state(charger, SEC_BAT_CHG_MODE_CHARGING_OFF);
 		max77705_set_float_voltage(charger, charger->float_voltage);
 		max77705_chg_set_mode_state(charger, SEC_BAT_CHG_MODE_CHARGING);
+		unormal_status = true;
+		pr_info("%s: unormal_status\n", __func__);
 	}
 
 	val_iin.intval = SEC_BATTERY_IIN_MA;
@@ -377,7 +384,7 @@ static int max77705_get_charging_health(struct max77705_charger_data *charger)
 	/*  OVP is higher priority */
 	if (vbus_state == 0x02) {	/*  CHGIN_OVLO */
 		pr_info("%s: vbus ovp\n", __func__);
-		if (is_wireless_type(charger->cable_type) || is_wcin_port()) {
+		if (is_wireless_type(charger->cable_type) || is_wcin_port(charger)) {
 			retry_cnt = 0;
 			do {
 				msleep(50);
@@ -394,17 +401,29 @@ static int max77705_get_charging_health(struct max77705_charger_data *charger)
 		}
 	} else if (((vbus_state == 0x0) || (vbus_state == 0x01)) && (chg_dtls & 0x08)
 		   && (chg_cnfg_00 & MAX77705_MODE_5_BUCK_CHG_ON)
-		   && (is_not_wireless_type(charger->cable_type) && !is_wcin_port())) {
+		   && (is_not_wireless_type(charger->cable_type) && !is_wcin_port(charger))) {
 		pr_info("%s: vbus is under\n", __func__);
 		state = POWER_SUPPLY_HEALTH_UNDERVOLTAGE;
 	} else if ((value.intval == POWER_SUPPLY_HEALTH_UNDERVOLTAGE) &&
 		   ((vbus_state == 0x0) || (vbus_state == 0x01)) &&
-		   (is_not_wireless_type(charger->cable_type) && !is_wcin_port())) {
+		   (is_not_wireless_type(charger->cable_type) && !is_wcin_port(charger))) {
 		pr_info("%s: keep under-voltage\n", __func__);
 		state = POWER_SUPPLY_HEALTH_UNDERVOLTAGE;
 	} else if(wdt_status) {
 		pr_info("%s: wdt expired\n", __func__);
 		state = POWER_SUPPLY_HEALTH_WATCHDOG_TIMER_EXPIRE;		
+	} else if (is_wireless_type(charger->cable_type)) {
+		if (unormal_status || (vbus_state == 0x0) || (vbus_state == 0x01))
+			charger->misalign_cnt++;
+		else
+			charger->misalign_cnt = 0;
+		
+		if (charger->misalign_cnt >= 3) {
+			pr_info("%s: invalid WCIN, Misalign occurs!\n", __func__);
+			value.intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+			psy_do_property(charger->pdata->wireless_charger_name,
+				set, POWER_SUPPLY_PROP_STATUS, value);
+		}
 	}
 
 	return (int)state;
@@ -463,7 +482,7 @@ static int max77705_get_input_current_type(struct max77705_charger_data
 
 static int max77705_get_input_current(struct max77705_charger_data *charger)
 {
-	if (is_wireless_type(charger->cable_type) || is_wcin_port())
+	if (is_wireless_type(charger->cable_type) || is_wcin_port(charger))
 		return max77705_get_input_current_type(charger, SEC_BATTERY_CABLE_WIRELESS);
 	else
 		return max77705_get_input_current_type(charger,	SEC_BATTERY_CABLE_TA);
@@ -479,7 +498,7 @@ static void reduce_input_current(struct max77705_charger_data *charger, int curr
 	if (input_current <= MINIMUM_INPUT_CURRENT)
 		return;
 
-	if (is_wireless_type(charger->cable_type) || is_wcin_port()) {
+	if (is_wireless_type(charger->cable_type) || is_wcin_port(charger)) {
 		set_reg = MAX77705_CHG_REG_CNFG_10;
 		set_mask = MAX77705_CHG_WCIN_LIM;
 		max_value = 1600;
@@ -524,7 +543,7 @@ static void max77705_check_cnfg12_reg(struct max77705_charger_data *charger)
 
 	if (is_valid) {
 		reg_data = MAX77705_CHG_WCINSEL;
-		valid_cnfg12 = (is_wireless_type(charger->cable_type) || is_wcin_port()) ?
+		valid_cnfg12 = (is_wireless_type(charger->cable_type) || is_wcin_port(charger)) ?
 			reg_data : (reg_data | (1 << CHG_CNFG_12_CHGINSEL_SHIFT));
 		
 		max77705_read_reg(charger->i2c, MAX77705_CHG_REG_CNFG_12, &reg_data);
@@ -543,7 +562,7 @@ static void max77705_change_charge_path(struct max77705_charger_data *charger,
 	u8 cnfg12;
 
 	if (enable) {
-		if (is_wireless_type(path) || is_wcin_port())
+		if (is_wireless_type(path) || is_wcin_port(charger))
 			cnfg12 = (0 << CHG_CNFG_12_CHGINSEL_SHIFT);
 		else
 			cnfg12 = (1 << CHG_CNFG_12_CHGINSEL_SHIFT);
@@ -596,7 +615,7 @@ static void max77705_set_input_current(struct max77705_charger_data *charger,
 
 	mutex_lock(&charger->charger_mutex);
 
-	if (is_wireless_type(charger->cable_type) || is_wcin_port()) {
+	if (is_wireless_type(charger->cable_type) || is_wcin_port(charger)) {
 		set_reg = MAX77705_CHG_REG_CNFG_10;
 		set_mask = MAX77705_CHG_WCIN_LIM;
 		input_current = (input_current > 1600) ? 1600 : input_current;
@@ -660,8 +679,14 @@ static void max77705_set_wireless_input_current(
 		msleep(500); /* delay 0.5sec */
 		charger->wc_pre_current = max77705_get_input_current(charger);
 		charger->wc_current = input_current;
-		if (charger->wc_current > charger->wc_pre_current)
+		if (charger->wc_current > charger->wc_pre_current) {
 			max77705_set_charge_current(charger, charger->charging_current);
+#if defined(CONFIG_WIRELESS_CHARGER_MFC_S2MIW04)
+			value.intval = input_current;
+			psy_do_property(charger->pdata->wireless_charger_name, set,
+					POWER_SUPPLY_PROP_CURRENT_MAX, value);
+#endif
+		}
 	}
 	queue_delayed_work(charger->wqueue, &charger->wc_current_work, 0);
 }
@@ -717,6 +742,7 @@ static void max77705_set_skipmode(struct max77705_charger_data *charger,
 {
 	u8 reg_data = enable ? MAX77705_AUTO_SKIP : MAX77705_DISABLE_SKIP;
 	
+	pr_info("%s : en(%d)\n", __func__, enable);	
 	max77705_update_reg(charger->i2c, MAX77705_CHG_REG_CNFG_12,
 			reg_data << CHG_CNFG_12_REG_DISKIP_SHIFT,
 			CHG_CNFG_12_REG_DISKIP_MASK);
@@ -747,7 +773,7 @@ static void max77705_set_b2sovrc(struct max77705_charger_data *charger,
 
 	return;
 }
-
+#if !defined(CONFIG_USE_POGO)
 static int max77705_check_wcin_before_otg_on(struct max77705_charger_data *charger)
 {
     union power_supply_propval value = {0,};
@@ -796,25 +822,28 @@ static int max77705_check_wcin_before_otg_on(struct max77705_charger_data *charg
 
     return 0;
 }
-
+#endif
 static int max77705_set_otg(struct max77705_charger_data *charger, int enable)
 {
 	union power_supply_propval value;
 	static u8 chg_int_state;
 	u8 reg = 0;
+#if !defined(CONFIG_USE_POGO)
 	int ret = 0;
+#endif
 
 	pr_info("%s: CHGIN-OTG %s\n", __func__,	enable > 0 ? "on" : "off");
 	if (charger->otg_on == enable || lpcharge)
 		return 0;
 
+#if !defined(CONFIG_USE_POGO)
 	if (charger->pdata->wireless_charger_name) {
 		ret = max77705_check_wcin_before_otg_on(charger);
 		pr_info("%s: wc_state = %d\n", __func__, ret);
 		if (ret < 0)
 			return ret;
 	}
-
+#endif
 	wake_lock(&charger->otg_wake_lock);
 	mutex_lock(&charger->charger_mutex);
 	/* CHGIN-OTG */
@@ -835,6 +864,16 @@ static int max77705_set_otg(struct max77705_charger_data *charger, int enable)
 
 		/* OTG on, boost on */
 		max77705_chg_set_mode_state(charger, SEC_BAT_CHG_MODE_OTG_ON);
+
+#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
+		/* Dis skip mode */
+		if (charger->cnfg00_mode == SEC_BAT_CHG_MODE_OTG_ON) {
+			cancel_delayed_work_sync(&charger->skipmode_work);
+			max77705_set_skipmode(charger, 0);
+			queue_delayed_work(charger->wqueue, &charger->skipmode_work,
+					msecs_to_jiffies(5000));
+		}
+#endif
 	} else {
 		/* OTG off(UNO on), boost off */
 		max77705_chg_set_mode_state(charger, SEC_BAT_CHG_MODE_OTG_OFF);
@@ -1115,6 +1154,7 @@ ssize_t max77705_chg_store_attrs(struct device *dev,
 	return ret;
 }
 
+#if !defined(CONFIG_USE_POGO)
 static void max77705_set_uno(struct max77705_charger_data *charger, int en)
 {
 	static u8 chg_int_state;
@@ -1185,6 +1225,7 @@ static void max77705_set_uno(struct max77705_charger_data *charger, int en)
 	pr_info("%s: UNO(%d), INT_MASK(0x%x), CHG_CNFG_00(0x%x)\n",
 		__func__, charger->uno_on, chg_int_state, reg);
 }
+#endif
 
 static void max77705_set_uno_iout(struct max77705_charger_data *charger, int iout)
 {
@@ -1249,7 +1290,6 @@ static int max77705_chg_get_property(struct power_supply *psy,
 				      MAX77705_CHG_REG_INT_OK, &reg_data)) {
 			if (reg_data & MAX77705_WCIN_OK) {
 				val->intval = SEC_BATTERY_CABLE_WIRELESS;
-				charger->wc_w_state = 1;
 			} else if (reg_data & MAX77705_CHGIN_OK) {
 				val->intval = SEC_BATTERY_CABLE_TA;
 			}
@@ -1405,6 +1445,7 @@ static void max77705_chg_set_mode_state(struct max77705_charger_data *charger,
 	}
 #endif
 
+	mutex_lock(&charger->mode_mutex);
 	pr_info("%s: current_mode(0x%x), state(%d)\n", __func__, charger->cnfg00_mode, state);
 	switch(charger->cnfg00_mode) {
 		/* all off */
@@ -1530,12 +1571,30 @@ static void max77705_chg_set_mode_state(struct max77705_charger_data *charger,
 		break;
 	}
 
+	if (state == SEC_BAT_CHG_MODE_OTG_ON &&
+		charger->cnfg00_mode == MAX77705_MODE_F_BUCK_CHG_BOOST_OTG_ON) {
+		/* W/A for shutdown problem when turn on OTG during wireless charging */
+		pr_info("%s : disable WCIN_SEL before change mode to 0xF\n", __func__);
+		max77705_update_reg(charger->i2c, MAX77705_CHG_REG_CNFG_12,
+			(0 << CHG_CNFG_12_WCINSEL_SHIFT), CHG_CNFG_12_WCINSEL_MASK);
+	}
+
 	pr_info("%s: current_mode(0x%x)\n", __func__, charger->cnfg00_mode);
 	max77705_update_reg(charger->i2c, MAX77705_CHG_REG_CNFG_00,
 			charger->cnfg00_mode, CHG_CNFG_00_MODE_MASK);
+
+	if (state == SEC_BAT_CHG_MODE_OTG_ON &&
+		charger->cnfg00_mode == MAX77705_MODE_F_BUCK_CHG_BOOST_OTG_ON) {
+		/* W/A for shutdown problem when turn on OTG during wireless charging */
+		pr_info("%s : enable WCIN_SEL after change mode to 0xF\n", __func__);
+		max77705_update_reg(charger->i2c, MAX77705_CHG_REG_CNFG_12,
+			MAX77705_CHG_WCINSEL,CHG_CNFG_12_WCINSEL_MASK);
+	}
+
 	max77705_read_reg(charger->i2c, MAX77705_CHG_REG_CNFG_00, &reg);
 	reg &= 0xF;
 	pr_info("%s: CNFG_00 (0x%x)\n", __func__, reg);
+	mutex_unlock(&charger->mode_mutex);
 }
 
 #if defined(CONFIG_UPDATE_BATTERY_DATA)
@@ -1558,6 +1617,7 @@ static int max77705_chg_set_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		charger->charge_mode = val->intval;
+		charger->misalign_cnt = 0;
 		max77705_chg_set_mode_state(charger, charger->charge_mode);
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
@@ -1572,8 +1632,10 @@ static int max77705_chg_set_property(struct power_supply *psy,
 
 		if (is_nocharge_type(charger->cable_type)) {
 			charger->wc_pre_current = WC_CURRENT_START;
+#if defined(CONFIG_USE_POGO)
 			wake_unlock(&charger->wpc_wake_lock);
 			cancel_delayed_work(&charger->wpc_work);
+#endif
 			max77705_update_reg(charger->i2c,
 				MAX77705_CHG_REG_INT_MASK, 0, MAX77705_WCIN_IM);
 			/* VCHGIN : REG=4.5V, UVLO=4.7V */
@@ -1681,8 +1743,12 @@ static int max77705_chg_set_property(struct power_supply *psy,
 		max77705_set_otg(charger, val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_UNO_CONTROL:
+#if defined(CONFIG_USE_POGO)
+		pr_info("%s: Do not Ctrl a WCIN-UNO for POGO(%d)\n", __func__, val->intval);
+#else
 		pr_info("%s: WCIN-UNO %d\n", __func__, val->intval);
 		max77705_set_uno(charger, val->intval);
+#endif
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT_MAX:
 		max77705_enable_aicl_irq(charger);
@@ -1694,6 +1760,17 @@ static int max77705_chg_set_property(struct power_supply *psy,
 #if defined(CONFIG_UPDATE_BATTERY_DATA)
 	case POWER_SUPPLY_PROP_POWER_DESIGN:
 		max77705_charger_parse_dt(charger);
+		break;
+#endif
+
+#if defined(CONFIG_USE_POGO)
+	case POWER_SUPPLY_PROP_CHARGE_TYPE:
+		pr_info("POWER_SUPPLY_PROP_CHARGE_TYPE- pogo_work=%d \n", val->intval);
+		wake_lock(&charger->wpc_wake_lock);
+		cancel_delayed_work(&charger->wpc_work);
+		queue_delayed_work(charger->wqueue, &charger->wpc_work, 500);
+		break;
+	case POWER_SUPPLY_PROP_CAPACITY:
 		break;
 #endif
 	case POWER_SUPPLY_PROP_MAX ... POWER_SUPPLY_EXT_PROP_MAX:
@@ -1951,11 +2028,37 @@ static irqreturn_t max77705_chg_irq_thread(int irq, void *irq_data)
 	return IRQ_HANDLED;
 }
 
-/* If we have external wireless TRx, enable WCIN interrupt to detect Mis-align only */
+#if defined(CONFIG_USE_POGO)
 static void wpc_detect_work(struct work_struct *work)
 {
 	struct max77705_charger_data *charger =
 		container_of(work, struct max77705_charger_data, wpc_work.work);
+#if defined(CONFIG_USE_POGO)
+	u8 reg_data, wcin_state, wcin_dtls = 0;
+	union power_supply_propval value;
+
+	pr_info("%s for pogo\n", __func__);
+	max77705_update_reg(charger->i2c,
+			    MAX77705_CHG_REG_INT_MASK, 0, MAX77705_WCIN_IM);
+
+	max77705_read_reg(charger->i2c, MAX77705_CHG_REG_INT_OK, &reg_data);
+	wcin_state = (reg_data & MAX77705_WCIN_OK) >> MAX77705_WCIN_OK_SHIFT;
+
+	max77705_read_reg(charger->i2c, MAX77705_CHG_REG_DETAILS_00, &reg_data);
+	wcin_dtls = (reg_data & MAX77705_WCIN_DTLS) >> MAX77705_WCIN_DTLS_SHIFT;
+
+	pr_info("%s wcin_state(%d) wcin_dtls(%d)\n", __func__, wcin_state, wcin_dtls);
+
+	if (wcin_state && wcin_dtls)
+		value.intval = 1;
+	else
+		value.intval = 0;
+	psy_do_property("pogo", set, POWER_SUPPLY_PROP_ONLINE, value);
+
+	/* Do unmask again. (for frequent wcin irq problem) */
+	max77705_update_reg(charger->i2c,
+			    MAX77705_CHG_REG_INT_MASK, 0, MAX77705_WCIN_IM);
+#else
 	union power_supply_propval value;
 	u8 reg_data, wcin_state, wcin_dtls, wcin_cnt = 0;
 
@@ -1986,7 +2089,7 @@ static void wpc_detect_work(struct work_struct *work)
 	/* Do unmask again. (for frequent wcin irq problem) */
 	max77705_update_reg(charger->i2c,
 			    MAX77705_CHG_REG_INT_MASK, 0, MAX77705_WCIN_IM);
-
+#endif
 	wake_unlock(&charger->wpc_wake_lock);
 }
 
@@ -1999,10 +2102,15 @@ static irqreturn_t wpc_charger_irq(int irq, void *data)
 	max77705_update_reg(charger->i2c, MAX77705_CHG_REG_INT_MASK,
 			    MAX77705_WCIN_IM, MAX77705_WCIN_IM);
 	wake_lock(&charger->wpc_wake_lock);
+#if defined(CONFIG_USE_POGO)
+	queue_delayed_work(charger->wqueue, &charger->wpc_work,
+			   msecs_to_jiffies(500));
+#else
 	queue_delayed_work(charger->wqueue, &charger->wpc_work, msecs_to_jiffies(10000));
-
+#endif
 	return IRQ_HANDLED;
 }
+#endif
 
 static irqreturn_t max77705_batp_irq(int irq, void *data)
 {
@@ -2272,7 +2380,7 @@ static void max77705_chgin_isr_work(struct work_struct *work)
 			&& (chg_cnfg_00 & MAX77705_MODE_BUCK)
 			&& (chg_cnfg_00 & MAX77705_MODE_CHGR)
 			&& (battery_health != POWER_SUPPLY_HEALTH_UNDERVOLTAGE)
-			&& (is_not_wireless_type(charger->cable_type) && !is_wcin_port() )) {
+			&& (is_not_wireless_type(charger->cable_type) && !is_wcin_port(charger) )) {
 			pr_info("%s: vbus_state : 0x%x, chg_state : 0x%x\n",
 				__func__, chgin_dtls, chg_dtls);
 			pr_info("%s: vBus is undervoltage\n", __func__);
@@ -2329,6 +2437,13 @@ static void max77705_chgin_init_work(struct work_struct *work)
 		max77705_update_reg(charger->i2c, MAX77705_CHG_REG_INT_MASK,
 				0, MAX77705_CHGIN_IM);
 }
+static void max77705_skipmode_work(struct work_struct *work)
+{
+	struct max77705_charger_data *charger =
+		container_of(work, struct max77705_charger_data, skipmode_work.work);
+	pr_info("%s\n", __func__);
+	max77705_set_skipmode(charger, 1);
+}
 
 static void max77705_wc_current_work(struct work_struct *work)
 {
@@ -2366,6 +2481,11 @@ static void max77705_wc_current_work(struct work_struct *work)
 
 		psy_do_property(charger->pdata->wireless_charger_name, set,
 				POWER_SUPPLY_PROP_INPUT_VOLTAGE_REGULATION, value);
+#if defined(CONFIG_WIRELESS_CHARGER_MFC_S2MIW04)
+		value.intval = charger->wc_current;
+		psy_do_property(charger->pdata->wireless_charger_name, set,
+				POWER_SUPPLY_PROP_CURRENT_MAX, value);
+#endif
 		wake_unlock(&charger->wc_current_wake_lock);
 	} else {
 		diff_current = charger->wc_pre_current - charger->wc_current;
@@ -2522,6 +2642,7 @@ static int max77705_charger_probe(struct platform_device *pdev)
 	}
 
 	mutex_init(&charger->charger_mutex);
+	mutex_init(&charger->mode_mutex);
 
 	charger->dev = &pdev->dev;
 	charger->i2c = max77705->charger;
@@ -2573,7 +2694,6 @@ static int max77705_charger_probe(struct platform_device *pdev)
 	}
 	wake_lock_init(&charger->chgin_wake_lock, WAKE_LOCK_SUSPEND, "charger->chgin");
 	wake_lock_init(&charger->aicl_wake_lock, WAKE_LOCK_SUSPEND, "charger-aicl");
-	wake_lock_init(&charger->wpc_wake_lock, WAKE_LOCK_SUSPEND, "charger-wpc");
 	wake_lock_init(&charger->wc_current_wake_lock,
 		WAKE_LOCK_SUSPEND, "charger->wc-current");
 	wake_lock_init(&charger->otg_wake_lock, WAKE_LOCK_SUSPEND, "charger->otg");
@@ -2581,8 +2701,12 @@ static int max77705_charger_probe(struct platform_device *pdev)
 	INIT_WORK(&charger->chgin_work, max77705_chgin_isr_work);
 	INIT_DELAYED_WORK(&charger->aicl_work, max77705_aicl_isr_work);
 	INIT_DELAYED_WORK(&charger->chgin_init_work, max77705_chgin_init_work);
+#if defined(CONFIG_USE_POGO)
+	wake_lock_init(&charger->wpc_wake_lock, WAKE_LOCK_SUSPEND, "charger-wpc");
 	INIT_DELAYED_WORK(&charger->wpc_work, wpc_detect_work);
+#endif
 	INIT_DELAYED_WORK(&charger->wc_current_work, max77705_wc_current_work);
+	INIT_DELAYED_WORK(&charger->skipmode_work, max77705_skipmode_work);
 
 	charger_cfg.drv_data = charger;
 	charger->psy_chg = power_supply_register(&pdev->dev,
@@ -2615,6 +2739,7 @@ static int max77705_charger_probe(struct platform_device *pdev)
 			pr_err("%s: Failed to Enable Wakeup Source(%d)\n", __func__, ret);
 	}
 
+#if defined(CONFIG_USE_POGO)
 	charger->wc_w_irq =
 		pdata->irq_base + MAX77705_CHG_IRQ_WCIN_I;
 	ret = request_threaded_irq(charger->wc_w_irq, NULL,
@@ -2624,10 +2749,9 @@ static int max77705_charger_probe(struct platform_device *pdev)
 		pr_err("%s: Failed to Request IRQ\n", __func__);
 		goto err_wc_irq;
 	}
+#endif
 
 	max77705_read_reg(charger->i2c, MAX77705_CHG_REG_INT_OK, &reg_data);
-	charger->wc_w_state =
-		(reg_data & MAX77705_WCIN_OK) >> MAX77705_WCIN_OK_SHIFT;
 
 	charger->irq_chgin = pdata->irq_base + MAX77705_CHG_IRQ_CHGIN_I;
 	/* enable chgin irq after sec_battery_probe */
@@ -2709,7 +2833,9 @@ err_power_supply_register:
 	wake_lock_destroy(&charger->sysovlo_wake_lock);
 	wake_lock_destroy(&charger->otg_wake_lock);
 	wake_lock_destroy(&charger->wc_current_wake_lock);
+#if defined(CONFIG_USE_POGO)
 	wake_lock_destroy(&charger->wpc_wake_lock);
+#endif
 	wake_lock_destroy(&charger->aicl_wake_lock);
 	wake_lock_destroy(&charger->chgin_wake_lock);
 err_pdata_free:
@@ -2745,8 +2871,10 @@ static int max77705_charger_remove(struct platform_device *pdev)
 
 	if (charger->irq_sysovlo)
 		free_irq(charger->irq_sysovlo, charger);
+#if defined(CONFIG_USE_POGO)
 	if (charger->wc_w_irq)
 		free_irq(charger->wc_w_irq, charger);
+#endif
 	if (charger->pdata->chg_irq)
 		free_irq(charger->pdata->chg_irq, charger);
 	if (charger->psy_chg)
@@ -2757,7 +2885,9 @@ static int max77705_charger_remove(struct platform_device *pdev)
 	wake_lock_destroy(&charger->sysovlo_wake_lock);
 	wake_lock_destroy(&charger->otg_wake_lock);
 	wake_lock_destroy(&charger->wc_current_wake_lock);
+#if defined(CONFIG_USE_POGO)
 	wake_lock_destroy(&charger->wpc_wake_lock);
+#endif
 	wake_lock_destroy(&charger->aicl_wake_lock);
 	wake_lock_destroy(&charger->chgin_wake_lock);
 

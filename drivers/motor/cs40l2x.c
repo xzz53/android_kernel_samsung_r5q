@@ -94,7 +94,6 @@ struct cs40l2x_private {
 	unsigned int q_measured;
 #ifdef CONFIG_CS40L2X_SAMSUNG_FEATURE
 	unsigned int intensity;
-	unsigned int force_touch_intensity;
 	EVENT_STATUS save_vib_event;
 #endif
 	struct cs40l2x_pbq_pair pbq_pairs[CS40L2X_PBQ_DEPTH_MAX];
@@ -423,10 +422,11 @@ static void set_cp_trigger_index_for_dig_scale(struct cs40l2x_private *cs40l2x)
 	case 10:
 	case 11:
 	case 15:
+	case 17:
 	case 23:
 	case 24:
 	case 25:
-	case 31 ... 50:
+	case 31 ... 70:
 		short_duration = 1;
 		break;
 	default:
@@ -2553,7 +2553,7 @@ static int cs40l2x_gpio1_dig_scale_get(struct cs40l2x_private *cs40l2x,
 	return 0;
 }
 #endif
-#if defined(CONFIG_CS40L2X_SAMSUNG_FEATURE) || defined(CIRRUS_VIB_DIG_SCALE_SUPPORT)
+#if defined(CIRRUS_VIB_DIG_SCALE_SUPPORT)
 static int cs40l2x_gpio1_dig_scale_set(struct cs40l2x_private *cs40l2x,
 			unsigned int dig_scale)
 {
@@ -3291,6 +3291,7 @@ static ssize_t cs40l2x_intensity_store(struct device *dev,
 	return count;
 }
 
+#if !defined (CONFIG_1030LRA_MOTOR)
 static ssize_t cs40l2x_haptic_engine_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
@@ -3309,45 +3310,7 @@ static ssize_t cs40l2x_haptic_engine_store(struct device *dev,
 
 	return count;
 }
-
-static ssize_t cs40l2x_force_touch_intensity_store(struct device *dev,
-		struct device_attribute *devattr, const char *buf, size_t count)
-{
-	struct cs40l2x_private *cs40l2x = cs40l2x_get_private(dev);
-	int ret = 0;
-	unsigned int intensity, dig_scale;
-
-	ret = kstrtou32(buf, 10, &intensity);
-	if (ret) {
-		pr_err("fail to get intensity\n");
-		return -EINVAL;
-	}
-
-	if(intensity > CS40L2X_INTENSITY_SCALE_MAX)
-		return -EINVAL;
-
- 	dig_scale = cs40l2x_pbq_dig_scale[intensity/100];
-	pr_info("%s: %u (gpio1 dig scale: %u)\n", __func__, intensity, dig_scale);
-
-	mutex_lock(&cs40l2x->lock);
-	ret = cs40l2x_gpio1_dig_scale_set(cs40l2x, dig_scale);
-	mutex_unlock(&cs40l2x->lock);
-
-	if (ret) {
-		pr_err("Failed to write digital scale\n");
-		return ret;
-	}
-
-	cs40l2x->force_touch_intensity = intensity;
-	return count;
-}
-
-static ssize_t cs40l2x_force_touch_intensity_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct cs40l2x_private *cs40l2x = cs40l2x_get_private(dev);
-	return snprintf(buf, 30, "force_touch_intensity: %u\n", cs40l2x->force_touch_intensity);
-}
+#endif
 
 static ssize_t cs40l2x_motor_type_show(struct device *dev, 
 		struct device_attribute *attr, char *buf)
@@ -4443,9 +4406,9 @@ static DEVICE_ATTR(heartbeat, 0660, cs40l2x_heartbeat_show, NULL);
 static DEVICE_ATTR(num_waves, 0660, cs40l2x_num_waves_show, NULL);
 #ifdef CONFIG_CS40L2X_SAMSUNG_FEATURE
 static DEVICE_ATTR(intensity, 0660, cs40l2x_intensity_show, cs40l2x_intensity_store);
+#if !defined (CONFIG_1030LRA_MOTOR)
 static DEVICE_ATTR(haptic_engine, 0660, cs40l2x_haptic_engine_show, cs40l2x_haptic_engine_store);
-static DEVICE_ATTR(force_touch_intensity, 0660, cs40l2x_force_touch_intensity_show,
-		cs40l2x_force_touch_intensity_store);
+#endif
 static DEVICE_ATTR(motor_type, 0660, cs40l2x_motor_type_show, NULL);
 static DEVICE_ATTR(event_cmd, 0660, cs40l2x_event_cmd_show, cs40l2x_event_cmd_store);
 #endif
@@ -4522,8 +4485,9 @@ static struct attribute *cs40l2x_dev_attrs[] = {
 	&dev_attr_num_waves.attr,
 #ifdef CONFIG_CS40L2X_SAMSUNG_FEATURE
 	&dev_attr_intensity.attr,
+#if !defined (CONFIG_1030LRA_MOTOR)
 	&dev_attr_haptic_engine.attr,
-	&dev_attr_force_touch_intensity.attr,
+#endif
 	&dev_attr_motor_type.attr,
 	&dev_attr_event_cmd.attr,
 #endif

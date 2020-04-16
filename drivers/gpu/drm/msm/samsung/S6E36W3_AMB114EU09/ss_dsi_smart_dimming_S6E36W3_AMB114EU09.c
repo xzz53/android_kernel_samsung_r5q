@@ -25,7 +25,7 @@ Copyright (C) 2012 - 2019, Samsung Electronics. All rights reserved.
  *
  */
 
-#include "ss_dsi_smart_dimming_S6E36W3_AMB119EU09.h"
+#include "ss_dsi_smart_dimming_S6E36W3_AMB114EU09.h"
 
 //#define SMART_DIMMING_DEBUG
 
@@ -1069,7 +1069,7 @@ static void wrap_smart_dimming_init(struct smartdim_conf *conf)
 	smart_dimming_init(smart);
 }
 
-struct smartdim_conf *smart_get_conf_S6E36W3_AMB119EU09(void)
+struct smartdim_conf *smart_get_conf_S6E36W3_AMB114EU09(void)
 {
 	struct smartdim_conf *smartdim_conf;
 	struct SMART_DIM *smart;
@@ -1426,7 +1426,7 @@ static void wrap_smart_dimming_init_hmt(struct smartdim_conf *conf)
 	smart_dimming_init_hmt(smart);
 }
 
-struct smartdim_conf *smart_get_conf_S6E36W3_AMB119EU09_hmt(void)
+struct smartdim_conf *smart_get_conf_S6E36W3_AMB114EU09_hmt(void)
 {
 	struct smartdim_conf *smartdim_conf_hmt;
 	struct SMART_DIM *smart_hmt;

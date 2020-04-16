@@ -266,6 +266,9 @@ enum dsi_dfps_type {
  */
 enum dsi_cmd_set_type {
 	DSI_CMD_SET_PRE_ON = 0,
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	DSI_CMD_SET_FD_ON_FACTORY,
+#endif
 	DSI_CMD_SET_ON,
 	DSI_CMD_SET_POST_ON,
 	DSI_CMD_SET_PRE_OFF,
@@ -347,6 +350,7 @@ enum dsi_cmd_set_type {
 	TX_HMT_LOW_PERSISTENCE_OFF_BRIGHT,
 	TX_HMT_REVERSE,
 	TX_HMT_FORWARD,
+	TX_HMT_GAMMA_MODE2_BRIGHT,
 	TX_FFC,
 	TX_DYNAMIC_FFC_SET,
 	TX_CABC_ON,

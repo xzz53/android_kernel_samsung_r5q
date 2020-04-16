@@ -188,6 +188,18 @@ config SENSORS_A96T365IF
 	help
 	  Choose A96T365IF.
 
+config SENSORS_A96T3X6_BLOCK_SAR_ONLY
+	tristate "Prevent entering sar only mode"
+	default n
+	help
+	  Prevent entering sar only mode.
+
+config SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+	bool "Setting for support both abov(1.6v) and semtech(3.0v) IC voltage"
+	default n
+	help
+	  Prevent entering sar only mode.
+
 config SENSORS_SYSFS
 	tristate "Sensors sysfs"
 	help

@@ -95,6 +95,8 @@
 		qcom,mdss-dsi-lane-0-state;
 		qcom,mdss-dsi-lane-1-state;
 		qcom,mdss-dsi-lane-map = "lane_map_0123";
+		samsung,num_of_data_lanes = <2>;
+
 
 		/* 60 FPS - DSC (width 480) */
 		qcom,mdss-dsi-t-clk-post = <0x18>;

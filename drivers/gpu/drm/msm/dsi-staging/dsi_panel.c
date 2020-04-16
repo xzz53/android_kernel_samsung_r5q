@@ -534,9 +534,19 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 	int rc = 0;
 
 #if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd = panel->panel_private;
+
 	if (!ss_panel_attach_get(panel->panel_private)) {
 		pr_info("PBA booting, skip to power off panel\n");
 		return 0;
+	}
+
+	/* If disp_en_gpio is used, turn off the reset_gpio first. */
+	if (vdd->dtsi_data.disp_en_gpio_use) {
+		if (gpio_is_valid(panel->reset_config.reset_gpio)) {
+			LCD_DEBUG("reset_gpio OFF\n");
+			gpio_set_value(panel->reset_config.reset_gpio, 0);
+		}
 	}
 #endif
 
@@ -586,6 +596,7 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 	struct dsi_display *display = container_of(panel->host, struct dsi_display, host);
 	size_t tot_tx_len = 0;
 	int retry = 5;
+	int max_cmd_fet_memory_size;
 
 	/* ss_get_cmds() gets proper QCT cmds or SS cmds for panel revision. */
 	set = ss_get_cmds(vdd, type);
@@ -639,6 +650,12 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 		LCD_DEBUG("No commands for cmd[%d]=%s\n", type, ss_get_cmd_name(type));
 		goto error;
 	}
+	if (vdd->dtsi_data.num_of_data_lanes == 1)
+		max_cmd_fet_memory_size = DSI_CTRL_MAX_CMD_FET_MEMORY_SIZE_ONE_DSI_LANE;
+	else
+		max_cmd_fet_memory_size = DSI_CTRL_MAX_CMD_FET_MEMORY_SIZE;
+	
+	LCD_DEBUG("vdd->dtsi_data.num_of_data_lanes for (CTRL_%d) = %d", vdd->ndx, vdd->dtsi_data.num_of_data_lanes);
 
 	for (i = 0; i < count; i++) {
 
@@ -649,8 +666,8 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 		if (i < count - 1)
 			tot_tx_len += ALIGN(((cmds + 1)->msg.tx_len + 4), 4);
 
-		if ((tot_tx_len > DSI_CTRL_MAX_CMD_FET_MEMORY_SIZE) || (i == count-1) || (cmds->post_wait_ms)) {
-			pr_debug("tot %zd is over than max || last cmd set, set last_command",
+		if ((tot_tx_len > max_cmd_fet_memory_size) || (i == count-1) || (cmds->post_wait_ms)) {
+			LCD_DEBUG("tot %zd is over than max || last cmd set, set last_command",
 					tot_tx_len);
 			cmds->last_command = true;
 			tot_tx_len = 0;
@@ -693,12 +710,14 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 			}
 		}
 
+#if 0
 		if (retry < 0)
- {
+		 {
 			SDE_DBG_DUMP("sde", "dsi0_ctrl", "dsi0_phy", "dsi1_ctrl",
 				"dsi1_phy", "vbif", "dbg_bus",
 				"vbif_dbg_bus", "panic");
 		}
+#endif
 #endif
 		if (cmds->post_wait_ms)
 			usleep_range(cmds->post_wait_ms*1000,
@@ -1859,6 +1878,7 @@ error:
 #if defined(CONFIG_DISPLAY_SAMSUNG)
 char *cmd_set_prop_map[SS_DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-pre-on-command",
+	"qcom,mdss-fd-on-factory-command",
 	"qcom,mdss-dsi-on-command",
 	"qcom,mdss-dsi-post-panel-on-command",
 	"qcom,mdss-dsi-pre-off-command",
@@ -1940,6 +1960,7 @@ char *cmd_set_prop_map[SS_DSI_CMD_SET_MAX] = {
 	"TX_HMT_LOW_PERSISTENCE_OFF_BRIGHT not parsed from DTSI",
 	"samsung,hmt_reverse_tx_cmds_revA",
 	"samsung,hmt_forward_tx_cmds_revA",
+	"samsung,hmt_gamma_mode2_bright_tx_cmds_revA",
 	"samsung,ffc_tx_cmds_revA",
 	"samsung,dyn_mipi_clk_ffc_cmds_revA",
 	"samsung,cabc_on_tx_cmds_revA",

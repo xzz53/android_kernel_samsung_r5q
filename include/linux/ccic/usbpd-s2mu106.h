@@ -506,6 +506,7 @@ typedef enum {
     S2MU106_THRESHOLD_621MV = 18,
     S2MU106_THRESHOLD_642MV = 19,
     S2MU106_THRESHOLD_685MV = 20,
+	S2MU106_THRESHOLD_814MV = 23,
     S2MU106_THRESHOLD_1000MV = 27,
 
     S2MU106_THRESHOLD_1200MV = 32,
@@ -695,6 +696,7 @@ struct s2mu106_usbpd_data {
     struct power_supply *psy_ccic;
 	int cc1_val;
 	int cc2_val;
+	int cc_instead_of_vbus;
     struct regulator *regulator;
 };
 

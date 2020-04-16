@@ -503,6 +503,7 @@ typedef struct usbpd_phy_ops {
 	int    (*get_pps_enable)(void *, int *);
 	void    (*send_ocp_info)(void *);
 #endif
+	void    (*send_pd_info)(void *, int);
 } usbpd_phy_ops_type;
 
 struct policy_data {
@@ -592,6 +593,8 @@ struct usbpd_manager_data {
 	bool uvdm_dir;
 	struct completion uvdm_out_wait;
 	struct completion uvdm_in_wait;
+	struct completion psrdy_wait;
+	bool pn_flag;
 
 	uint16_t Vendor_ID;
 	uint16_t Product_ID;
@@ -726,5 +729,6 @@ void usbpd_timer1_start(struct usbpd_data *pd_data);
 long long usbpd_check_time1(struct usbpd_data *pd_data);
 void usbpd_timer2_start(struct usbpd_data *pd_data);
 long long usbpd_check_time2(struct usbpd_data *pd_data);
+bool sec_pps_control(int en);
 
 #endif

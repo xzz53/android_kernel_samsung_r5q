@@ -10,6 +10,9 @@ endif
 ifeq ($(CONFIG_SEC_BEYOND2Q5G_PROJECT),y)
 five_old_signature := y
 endif
+ifeq ($(CONFIG_SEC_WINNERLTE_PROJECT),y)
+five_old_signature := y
+endif
 
 ifeq ($(five_old_signature),y)
 five_sign_runtype := qc_secimg50_tzapp

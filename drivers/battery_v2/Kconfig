@@ -992,3 +992,9 @@ config PREVENT_USB_CONN_OVERHEAT
     default n
     help
 	  Say Y to enable CONFIG_PREVENT_USB_CONN_OVERHEAT
+
+config TX_5V_DISABLE
+    bool "disable TX in case of 5V"
+    default n
+    help
+	  Say Y to enable CONFIG_TX_5V_DISABLE

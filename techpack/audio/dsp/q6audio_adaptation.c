@@ -486,6 +486,35 @@ int adm_set_sb_rotation(int port_id, int copp_idx,
 	return ret;
 }
 
+int adm_set_interview_operating_mode(int port_id, int copp_idx,
+			long *param)
+{
+	struct adm_param_interview_operating_mode cmd;
+	struct param_hdr_v3 param_hdr;
+	int ret  = 0;
+
+	memset(&param_hdr, 0, sizeof(param_hdr));
+	param_hdr.module_id = MODULE_ID_PP_SS_REC;
+	param_hdr.instance_id = 0x8000;
+	param_hdr.param_id = PARAM_ID_PP_SS_REC_SETPARAMS;
+	param_hdr.param_size = sizeof(cmd);
+	/* Interview solution bypass paramerters */
+	cmd.onoff = (unsigned int)param[0];
+
+	pr_info("%s: Enter, port_id(0x%x), copp_idx(%d), enable(%d)\n",
+		  __func__, port_id, copp_idx, cmd.onoff);
+
+	ret = adm_pack_and_set_one_pp_param(port_id, copp_idx, param_hdr,
+					    (uint8_t *) &cmd);
+	if (ret)
+		pr_err("%s: Failed to set interview mode params, err %d\n",
+		       __func__, ret);
+
+	pr_debug("%s: Exit, ret=%d\n", __func__, ret);
+
+	return ret;
+}
+
 static int sec_audio_sound_alive_get(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_value *ucontrol)
 {
@@ -601,6 +630,12 @@ static int sec_audio_sb_rotation_get(struct snd_kcontrol *kcontrol,
 }
 
 static int sec_audio_dolby_atmos_get(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	return 0;
+}
+
+static int sec_audio_interview_mode_get(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_value *ucontrol)
 {
 	return 0;
@@ -875,6 +910,36 @@ static int sec_audio_dolby_atmos_put(struct snd_kcontrol *kcontrol,
 	ret = q6asm_set_dolby_atmos(ac, (long *)ucontrol->value.integer.value);
 	mutex_unlock(&asm_lock);
 
+	return ret;
+}
+
+static int sec_audio_interview_mode_put(struct snd_kcontrol *kcontrol,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	int ret = 0;
+	int port_id, copp_idx;
+
+	port_id = afe_port.voice_tracking_id;
+	copp_idx = sec_get_copp_idx(port_id, SESSION_TYPE_TX);
+	if (copp_idx) {
+		pr_err("%s: Could not get copp idx for port_id=%d\n",
+			__func__, port_id);
+
+		ret = -EINVAL;
+		goto done;
+	}
+
+	ret = adm_set_interview_operating_mode(port_id, copp_idx,
+		(long *)ucontrol->value.integer.value);
+	if (ret) {
+		pr_err("%s: Error setting interview mode, err=%d\n",
+			  __func__, ret);
+
+		ret = -EINVAL;
+		goto done;
+	}
+
+done:
 	return ret;
 }
 
@@ -2408,6 +2473,8 @@ static const struct snd_kcontrol_new samsung_solution_mixer_controls[] = {
 	SOC_SINGLE_EXT("Remote Mic Vol Index", SND_SOC_NOPM, 0, 65535, 0,
 				sec_voice_remote_mic_vol_get,
 				sec_voice_remote_mic_vol_put),
+	SOC_SINGLE_EXT("Interview Mode", SND_SOC_NOPM, 0, 1, 0,
+				sec_audio_interview_mode_get, sec_audio_interview_mode_put),
 };
 
 static int q6audio_adaptation_platform_probe(struct snd_soc_platform *platform)

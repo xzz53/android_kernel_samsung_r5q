@@ -26,8 +26,8 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
  * You should have received a copy of the GNU General Public License
  *
 */
-#include "ss_dsi_panel_S6E36W3_AMB119EU09.h"
-#include "ss_dsi_mdnie_S6E36W3_AMB119EU09.h"
+#include "ss_dsi_panel_S6E36W3_AMB114EU09.h"
+#include "ss_dsi_mdnie_S6E36W3_AMB114EU09.h"
 
 static int samsung_panel_on_pre(struct samsung_display_driver_data *vdd)
 {
@@ -60,7 +60,8 @@ static char ss_panel_revision(struct samsung_display_driver_data *vdd)
 	/* Specific colors not black (default) 
 	 * ZK : Black
 	 * ZP : Pupple
-	 * ZB : Blue
+	 * ZD : GOLD
+	 * ZA : TOM BROWN	 
 	 * color rev is from rev 'K'
 	 */
 
@@ -68,6 +69,10 @@ static char ss_panel_revision(struct samsung_display_driver_data *vdd)
 
 	if (!strcmp(vdd->window_color, "ZP")) {	/* PURPLE */
 		vdd->panel_revision = 'K';
+	} else if (!strcmp(vdd->window_color, "ZD")) {	/* GOLD */
+		vdd->panel_revision = 'L';
+	} else if (!strcmp(vdd->window_color, "ZA")) {	/* TOM BROWN */
+		vdd->panel_revision = 'M';
 	} else {
 		switch (ss_panel_rev_get(vdd)) {
 		case 0x00:
@@ -348,37 +353,20 @@ static struct dsi_panel_cmd_set *ss_hbm_etc(struct samsung_display_driver_data *
 		LCD_ERR("Invalid data  vdd : 0x%zx cmd : 0x%zx", (size_t)vdd, (size_t)hbm_etc_cmds);
 		return NULL;
 	}
-#if 0 //SUB_DISPLAY_TBD
+
 	/* MPS/ELVSS : 0xB5 1th TSET */
 	hbm_etc_cmds->cmds[1].msg.tx_buf[1] =
 		vdd->temperature > 0 ? vdd->temperature : 0x80|(-1*vdd->temperature);
 
-	if (vdd->acl_status == 1) {  /*acl on : 8%*/
-		hbm_etc_cmds->cmds[2].msg.tx_buf[1] = 0x50; /*B4 1st*/
-		hbm_etc_cmds->cmds[2].msg.tx_buf[13] = 0x50; /*B4 13th*/
-		hbm_etc_cmds->cmds[3].msg.tx_buf[1] = 0x02; /*55 1st*/
-	} else {  /*acl off*/
-		hbm_etc_cmds->cmds[2].msg.tx_buf[1] = 0x40; /*B4 1st*/
-		hbm_etc_cmds->cmds[2].msg.tx_buf[13] = 0x40; /*B4 13th*/
-		hbm_etc_cmds->cmds[3].msg.tx_buf[1] = 0x00; /*55 1st*/
-	}
-	/* Read B5h 24th para -> Write to B5h 23th para */
-	hbm_etc_cmds->cmds[1].msg.tx_buf[23] = vdd->br.elvss_value2;
-
-	*level_key = LEVEL1_KEY;
-
-	LCD_INFO("B6_3rd_PARA = 0x%x, TSET = 0x%x, 23th = 0x%x \n",
-		hbm_etc_cmds->cmds[1].msg.tx_buf[3], hbm_etc_cmds->cmds[1].msg.tx_buf[1], hbm_etc_cmds->cmds[1].msg.tx_buf[23]);
-#endif
 	return hbm_etc_cmds;
 }
 
 #define COORDINATE_DATA_SIZE 6
 
-#define F1(x, y) ((y)-((353*(x))/326)+30)
-#define F2(x, y) ((y)-((20*(x))/19)-14)
-#define F3(x, y) ((y)+((185*(x))/42)-16412)
-#define F4(x, y) ((y)+((337*(x))/106)-12601)
+#define F1(x, y) ((y)-((39*(x))/38)-95)
+#define F2(x, y) ((y)-((36*(x))/35)-56)
+#define F3(x, y) ((y)+((7*(x))/1)-24728)
+#define F4(x, y) ((y)+((25*(x))/7)-14031)
 
 /* Normal Mode */
 static char coordinate_data_1[][COORDINATE_DATA_SIZE] = {
@@ -396,16 +384,16 @@ static char coordinate_data_1[][COORDINATE_DATA_SIZE] = {
 
 /* sRGB/Adobe RGB Mode */
 static char coordinate_data_2[][COORDINATE_DATA_SIZE] = {
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* dummy */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_1 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_2 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_3 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_4 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_5 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_6 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_7 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_8 */
-	{0xff, 0x00, 0xfd, 0x00, 0xf7, 0x00}, /* Tune_9 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* dummy */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_1 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_2 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_3 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_4 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_5 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_6 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_7 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_8 */
+	{0xff, 0x00, 0xfc, 0x00, 0xf6, 0x00}, /* Tune_9 */
 };
 
 static char (*coordinate_data_multi[MAX_MODE])[COORDINATE_DATA_SIZE] = {
@@ -617,6 +605,11 @@ static struct dsi_panel_cmd_set *ss_elvss(struct samsung_display_driver_data *vd
 	/* 	cmds[0].msg.tx_buf[1] = TSET | cmds[0].msg.tx_buf[2] = MPS_CON | msg.tx_buf[3] = ELVSS_Dim_offset */	
 	elvss_cmds->cmds[cmd_idx].msg.tx_buf[1] =
 		vdd->temperature > 0 ? vdd->temperature : 0x80|(-1*vdd->temperature);
+	/* 0xB5 2th MSP */
+	if (vdd->br.cd_level > 39)
+		elvss_cmds->cmds[cmd_idx].msg.tx_buf[2] = 0xDC;
+	else
+		elvss_cmds->cmds[cmd_idx].msg.tx_buf[2] = 0xCC;
 
 	LCD_INFO("cd_index (%d) cmd_idx(%d) candela_value(%d) B5 1st(%x) 2nd (%x) 3rd (%x)\n",
 		cd_index, cmd_idx, candela_value,
@@ -1163,14 +1156,17 @@ static int dsi_update_mdnie_data(struct samsung_display_driver_data *vdd)
 	mdnie_data->DSI_COLOR_BLIND_MDNIE_1 = DSI0_COLOR_BLIND_MDNIE_1;
 	mdnie_data->DSI_RGB_SENSOR_MDNIE_1 = DSI0_RGB_SENSOR_MDNIE_1;
 	mdnie_data->DSI_RGB_SENSOR_MDNIE_2 = DSI0_RGB_SENSOR_MDNIE_2;
-	mdnie_data->DSI_RGB_SENSOR_MDNIE_3 = DSI0_RGB_SENSOR_MDNIE_3;
-	mdnie_data->DSI_TRANS_DIMMING_MDNIE = DSI0_RGB_SENSOR_MDNIE_3;
+	mdnie_data->DSI_RGB_SENSOR_MDNIE_3 = DSI0_RGB_SENSOR_MDNIE_2;
+	mdnie_data->DSI_TRANS_DIMMING_MDNIE = DSI0_RGB_SENSOR_MDNIE_2;
 
 	mdnie_data->DSI_BYPASS_MDNIE = DSI0_BYPASS_MDNIE;
 	mdnie_data->DSI_NEGATIVE_MDNIE = DSI0_NEGATIVE_MDNIE;
 	mdnie_data->DSI_COLOR_BLIND_MDNIE = DSI0_COLOR_BLIND_MDNIE;
 	mdnie_data->DSI_HBM_CE_MDNIE = DSI0_HBM_CE_MDNIE;
 	mdnie_data->DSI_RGB_SENSOR_MDNIE = DSI0_RGB_SENSOR_MDNIE;
+	mdnie_data->DSI_UI_DYNAMIC_MDNIE = DSI0_UI_DYNAMIC_MDNIE;
+	mdnie_data->DSI_UI_AUTO_MDNIE = DSI0_UI_AUTO_MDNIE;
+	mdnie_data->DSI_CAMERA_AUTO_MDNIE = DSI0_CAMERA_AUTO_MDNIE;	
 	mdnie_data->DSI_GRAYSCALE_MDNIE = DSI0_GRAYSCALE_MDNIE;
 	mdnie_data->DSI_GRAYSCALE_NEGATIVE_MDNIE = DSI0_GRAYSCALE_NEGATIVE_MDNIE;
 	mdnie_data->DSI_CURTAIN = DSI0_SCREEN_CURTAIN_MDNIE;
@@ -1193,10 +1189,9 @@ static int dsi_update_mdnie_data(struct samsung_display_driver_data *vdd)
 	mdnie_data->address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET] = ADDRESS_SCR_WHITE_RED;
 	mdnie_data->address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET] = ADDRESS_SCR_WHITE_GREEN;
 	mdnie_data->address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET] = ADDRESS_SCR_WHITE_BLUE;
-	mdnie_data->DSI_NIGHT_MODE_MDNIE = DSI0_NIGHT_MODE_MDNIE;
 	mdnie_data->dsi_rgb_sensor_mdnie_1_size = DSI0_RGB_SENSOR_MDNIE_1_SIZE;
 	mdnie_data->dsi_rgb_sensor_mdnie_2_size = DSI0_RGB_SENSOR_MDNIE_2_SIZE;
-	mdnie_data->dsi_rgb_sensor_mdnie_3_size = DSI0_RGB_SENSOR_MDNIE_3_SIZE;
+	mdnie_data->dsi_rgb_sensor_mdnie_3_size = 0;
 	mdnie_data->dsi_trans_dimming_data_index = MDNIE_TRANS_DIMMING_DATA_INDEX;
 	mdnie_data->dsi_adjust_ldu_table = adjust_ldu_data;
 	mdnie_data->dsi_max_adjust_ldu = 6;
@@ -1206,8 +1201,12 @@ static int dsi_update_mdnie_data(struct samsung_display_driver_data *vdd)
 	mdnie_data->dsi_white_default_r = 0xff;
 	mdnie_data->dsi_white_default_g = 0xff;
 	mdnie_data->dsi_white_default_b = 0xff;
+	mdnie_data->dsi_white_balanced_r = 0;
+	mdnie_data->dsi_white_balanced_g = 0;
+	mdnie_data->dsi_white_balanced_b = 0;
 	mdnie_data->dsi_scr_step_index = MDNIE_STEP1_INDEX;
-	mdnie_data->light_notification_tune_value_dsi = light_notification_tune_value_dsi0;
+	mdnie_data->light_notification_tune_value_dsi = light_notification_tune_value_dsi0;	
+	mdnie_data->hdr_tune_value_dsi = hdr_tune_value_dsi0;
 
 	vdd->mdnie.mdnie_data = mdnie_data;
 
@@ -1229,8 +1228,14 @@ static int ss_self_display_data_init(struct samsung_display_driver_data *vdd)
 	LCD_INFO("Self Display Panel Data init\n");
 
 	/* SELF DISPLAY */
-	vdd->self_disp.operation[FLAG_SELF_MASK].img_buf = self_mask_img_data;
-	vdd->self_disp.operation[FLAG_SELF_MASK].img_size = ARRAY_SIZE(self_mask_img_data);
+	if (unlikely(vdd->is_factory_mode)) {
+		vdd->self_disp.operation[FLAG_SELF_MASK].img_buf = self_mask_img_data_factory;
+		vdd->self_disp.operation[FLAG_SELF_MASK].img_size = ARRAY_SIZE(self_mask_img_data_factory);
+	}
+	else {
+		vdd->self_disp.operation[FLAG_SELF_MASK].img_buf = self_mask_img_data;
+		vdd->self_disp.operation[FLAG_SELF_MASK].img_size = ARRAY_SIZE(self_mask_img_data);
+	}
 	make_self_display_img_cmds_6W3(vdd, TX_SELF_MASK_IMAGE, FLAG_SELF_MASK);
 	vdd->self_disp.operation[FLAG_SELF_MASK].img_checksum = SELF_MASK_IMG_CHECKSUM;
 
@@ -1275,7 +1280,7 @@ static void samsung_panel_init(struct samsung_display_driver_data *vdd)
 
 	/* Smart Dimming */
 	vdd->panel_func.samsung_smart_dimming_init = ss_smart_dimming_init;
-	vdd->panel_func.samsung_smart_get_conf = smart_get_conf_S6E36W3_AMB119EU09;
+	vdd->panel_func.samsung_smart_get_conf = smart_get_conf_S6E36W3_AMB114EU09;
 
 	/* Brightness */
 	vdd->panel_func.samsung_brightness_aid = ss_aid;
@@ -1318,7 +1323,7 @@ static void samsung_panel_init(struct samsung_display_driver_data *vdd)
 #if 0
 	vdd->mdnie_tune_size1 = sizeof(DSI0_BYPASS_MDNIE_1);
 	vdd->mdnie_tune_size2 = sizeof(DSI0_BYPASS_MDNIE_2);
-	vdd->mdnie_tune_size3 = sizeof(DSI0_BYPASS_MDNIE_3);
+	vdd->mdnie_tune_size3 = sizeof(DSI0_BYPASS_MDNIE_2);
 #endif
 
 	dsi_update_mdnie_data(vdd);
@@ -1352,7 +1357,7 @@ static int __init samsung_panel_initialize(void)
 {
 	struct samsung_display_driver_data *vdd;
 	enum ss_display_ndx ndx;
-	char panel_string[] = "ss_dsi_panel_S6E36W3_AMB119EU09_172X300";
+	char panel_string[] = "ss_dsi_panel_S6E36W3_AMB114EU09";
 	char panel_name[MAX_CMDLINE_PARAM_LEN];
 	char panel_secondary_name[MAX_CMDLINE_PARAM_LEN];
 

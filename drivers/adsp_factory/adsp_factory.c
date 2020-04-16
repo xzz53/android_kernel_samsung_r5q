@@ -460,6 +460,9 @@ static int process_received_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 #endif
 #ifdef CONFIG_SUPPORT_DEVICE_MODE
 		sns_device_mode_init_work();
+#ifdef CONFIG_SUPPORT_DUAL_OPTIC
+		sns_flip_init_work();
+#endif
 #endif
 #ifdef CONFIG_SUPPORT_BHL_COMPENSATION_FOR_LIGHT_SENSOR
 		light_factory_init_work(data);

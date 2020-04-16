@@ -37,7 +37,11 @@
 #include <linux/ssp_motorcallback.h>
 #endif
 
-const char sec_vib_event_cmd[EVENT_CMD_MAX][MAX_STR_LEN_EVENT_CMD] = {
+#if defined(CONFIG_BATTERY_SAMSUNG_V2)
+#include "../battery_v2/include/sec_charging_common.h"
+#endif
+
+const char s2mu106_sec_vib_event_cmd[EVENT_CMD_MAX][MAX_STR_LEN_EVENT_CMD] = {
 	[EVENT_CMD_NONE]					= "NONE",
 	[EVENT_CMD_FOLDER_CLOSE]				= "FOLDER_CLOSE",
 	[EVENT_CMD_FOLDER_OPEN]					= "FOLDER_OPEN",
@@ -45,7 +49,7 @@ const char sec_vib_event_cmd[EVENT_CMD_MAX][MAX_STR_LEN_EVENT_CMD] = {
 	[EVENT_CMD_ACCESSIBILITY_BOOST_OFF]			= "ACCESSIBILITY_BOOST_OFF",
 };
 
-char sec_prev_event_cmd[MAX_STR_LEN_EVENT_CMD];
+char s2mu106_sec_prev_event_cmd[MAX_STR_LEN_EVENT_CMD];
 #if defined(CONFIG_FOLDER_HALL)
 static const int FOLDER_TYPE = 1;
 #else
@@ -106,12 +110,27 @@ static void s2mu106_haptic_set_freq(struct s2mu106_haptic_data *haptic, int freq
 	pdata->freq = freq;
 }
 
+#if defined(CONFIG_BATTERY_SAMSUNG_V2)
+static int s2mu106_get_temperature_duty_ratio(struct s2mu106_haptic_data *haptic)
+{
+	union power_supply_propval value = {0, };
+	int ret = haptic->pdata->ratio;
+
+	psy_do_property("battery", get, POWER_SUPPLY_PROP_TEMP, value);
+	if (value.intval >= haptic->pdata->temperature)
+		ret = haptic->pdata->high_temp_ratio;
+	pr_info("%s temp:%d duty:%d\n", __func__, value.intval, ret);
+	return ret;
+}
+#endif
+
 static void s2mu106_haptic_set_intensity(struct s2mu106_haptic_data *haptic, int intensity)
 {
 	struct s2mu106_haptic_platform_data *pdata = haptic->pdata;
 	int data = 0x3FFFF;
 	int max = 0x7FFFF;
 	u8 val1, val2, val3;
+	int duty_ratio = pdata->ratio;
 
 	intensity = intensity / 100;
 	haptic->intensity = intensity;
@@ -136,7 +155,13 @@ static void s2mu106_haptic_set_intensity(struct s2mu106_haptic_data *haptic, int
 	s2mu106_write_reg(haptic->i2c, S2MU106_REG_AMPCOEF2, val2);
 	s2mu106_update_reg(haptic->i2c, S2MU106_REG_AMPCOEF3, val1 << 4, 0xF0);
 
-	pdata->duty = (pdata->period * pdata->ratio) / 100;
+#if defined(CONFIG_BATTERY_SAMSUNG_V2)
+	if (haptic->pdata->high_temp_ratio)
+		duty_ratio = s2mu106_get_temperature_duty_ratio(haptic);
+
+	pdata->ratio = duty_ratio;
+#endif
+	pdata->duty = (pdata->period * duty_ratio) / 100;
 }
 
 static void s2mu106_haptic_onoff(struct s2mu106_haptic_data *haptic, bool en)
@@ -150,6 +175,12 @@ static void s2mu106_haptic_onoff(struct s2mu106_haptic_data *haptic, bool en)
 		switch (haptic->hap_mode) {
 		case S2MU106_HAPTIC_LRA:
 			s2mu106_write_reg(haptic->i2c, S2MU106_REG_HAPTIC_MODE, LRA_MODE_EN);
+			if (haptic->pdata->hbst.en) {
+				s2mu106_update_reg(haptic->i2c, S2MU106_REG_HBST_CTRL0,
+                  			SEL_HBST_HAPTIC_MASK, SEL_HBST_HAPTIC_MASK);
+				s2mu106_update_reg(haptic->i2c, S2MU106_REG_OV_BK_OPTION,
+					0, LRA_BST_MODE_SET_MASK);
+			}
 			pwm_config(haptic->pwm, haptic->pdata->duty,
 					haptic->pdata->period);
 			pwm_enable(haptic->pwm);
@@ -171,6 +202,12 @@ static void s2mu106_haptic_onoff(struct s2mu106_haptic_data *haptic, bool en)
 		case S2MU106_HAPTIC_LRA:
 			pwm_disable(haptic->pwm);
 			s2mu106_write_reg(haptic->i2c, S2MU106_REG_HAPTIC_MODE, HAPTIC_MODE_OFF);
+			if (haptic->pdata->hbst.en) {
+				s2mu106_update_reg(haptic->i2c, S2MU106_REG_HBST_CTRL0,
+					0, SEL_HBST_HAPTIC_MASK);
+				s2mu106_update_reg(haptic->i2c, S2MU106_REG_OV_BK_OPTION,
+					LRA_BST_MODE_SET_MASK, LRA_BST_MODE_SET_MASK);
+			}
 			break;
 		case S2MU106_HAPTIC_ERM_GPIO:
 			if (gpio_is_valid(haptic->motor_en))
@@ -365,7 +402,7 @@ static int get_event_index_by_command(char *cur_cmd)
 	pr_info("%s: current state=%s\n", __func__, cur_cmd);
 
 	for(cmd_idx = 0; cmd_idx < EVENT_CMD_MAX; cmd_idx++) {
-		if(!strcmp(cur_cmd, sec_vib_event_cmd[cmd_idx])) {
+		if(!strcmp(cur_cmd, s2mu106_sec_vib_event_cmd[cmd_idx])) {
 			break;
 		}
 	}
@@ -593,8 +630,8 @@ DEVICE_ATTR(motor_type, 0660, motor_type_show, NULL);
 static ssize_t event_cmd_show(struct device *dev, 
 		struct device_attribute *attr, char *buf)
 {
-	pr_info("%s: [%s]\n", __func__, sec_prev_event_cmd);
-	return snprintf(buf, MAX_STR_LEN_EVENT_CMD, "%s\n", sec_prev_event_cmd);
+	pr_info("%s: [%s]\n", __func__, s2mu106_sec_prev_event_cmd);
+	return snprintf(buf, MAX_STR_LEN_EVENT_CMD, "%s\n", s2mu106_sec_prev_event_cmd);
 }
 
 static ssize_t event_cmd_store(struct device *dev,
@@ -626,7 +663,7 @@ static ssize_t event_cmd_store(struct device *dev,
 	idx = get_event_index_by_command(cmd);
 	set_ratio_for_event(pdata, idx);
 
-	ret = sscanf(cmd, "%s", sec_prev_event_cmd);
+	ret = sscanf(cmd, "%s", s2mu106_sec_prev_event_cmd);
 	if (ret != 1)
 		goto error1;
 
@@ -716,6 +753,24 @@ static int s2mu106_haptic_parse_dt(struct device *dev,
 		pdata->folder_ratio = (int)temp;
 
 	pr_info("folder ratio = %d\n", pdata->folder_ratio);
+
+	ret = of_property_read_u32(np, "haptic,high_temp_ratio",
+			&pdata->high_temp_ratio);
+	if (ret) {
+		pr_err("%s: temp_duty_ratio isn't used\n", __func__);
+		pdata->high_temp_ratio = 0;
+	}
+
+	pr_info("high temp ratio = %d\n", pdata->high_temp_ratio);
+
+	ret = of_property_read_u32(np, "haptic,temperature",
+			&pdata->temperature);
+	if (ret) {
+		pr_err("%s: temperature isn't used\n", __func__);
+		pdata->temperature = 0;
+	}
+
+	pr_info("temperature = %d\n", pdata->temperature);
 
 	/* initial pwm duty ratio to normal ratio */
 	pdata->ratio = pdata->normal_ratio;
@@ -861,15 +916,8 @@ static void s2mu106_haptic_initial(struct s2mu106_haptic_data *haptic)
 		s2mu106_update_reg(haptic->i2c, S2MU106_REG_HT_OTP0,
 			0, HBST_OK_MASK_EN);
 
-		if (haptic->pdata->hbst.automode) {
-			/* haptic boost operating with haptic motor */
-			s2mu106_update_reg(haptic->i2c,	S2MU106_REG_HBST_CTRL0,
-				SEL_HBST_HAPTIC_MASK, (SEL_HBST_HAPTIC_MASK | EN_HBST_EXT_MASK));
-		} else {
-			/* haptic boost operating independently */
-			s2mu106_update_reg(haptic->i2c,	S2MU106_REG_HBST_CTRL0,
-				EN_HBST_EXT_MASK, (SEL_HBST_HAPTIC_MASK | EN_HBST_EXT_MASK));
-		}
+		s2mu106_update_reg(haptic->i2c, S2MU106_REG_HBST_CTRL0,
+			0, SEL_HBST_HAPTIC_MASK);
 	} else {
 		/* haptic operating without haptic boost */
 		s2mu106_update_reg(haptic->i2c,	S2MU106_REG_HBST_CTRL0,
@@ -897,8 +945,14 @@ static void s2mu106_haptic_initial(struct s2mu106_haptic_data *haptic)
 		data = HAPTIC_MODE_OFF;
 		pwm_config(haptic->pwm, haptic->pdata->duty,
 				haptic->pdata->period);
-		s2mu106_update_reg(haptic->i2c, S2MU106_REG_OV_BK_OPTION,
-					LRA_MODE_SET_MASK, LRA_MODE_SET_MASK);
+		if (haptic->pdata->hbst.en){
+			s2mu106_update_reg(haptic->i2c, S2MU106_REG_OV_BK_OPTION,
+				LRA_MODE_SET_MASK | LRA_BST_MODE_SET_MASK,
+				LRA_MODE_SET_MASK | LRA_BST_MODE_SET_MASK);
+		} else {
+			s2mu106_update_reg(haptic->i2c, S2MU106_REG_OV_BK_OPTION,
+				LRA_MODE_SET_MASK, LRA_MODE_SET_MASK);
+		}
 		s2mu106_write_reg(haptic->i2c, S2MU106_REG_FILTERCOEF1, 0x7F);
 		s2mu106_write_reg(haptic->i2c, S2MU106_REG_FILTERCOEF2, 0x5A);
 		s2mu106_write_reg(haptic->i2c, S2MU106_REG_FILTERCOEF3, 0x02);
@@ -938,7 +992,7 @@ static void s2mu106_haptic_initial(struct s2mu106_haptic_data *haptic)
 
 	pr_info("%s, haptic operation mode = %d\n", __func__, haptic->hap_mode);
 
-	sscanf(sec_vib_event_cmd[0], "%s", sec_prev_event_cmd);
+	sscanf(s2mu106_sec_vib_event_cmd[0], "%s", s2mu106_sec_prev_event_cmd);
 	haptic->pdata->save_vib_event.DATA = 0;
 #if defined(CONFIG_FOLDER_HALL)
 	haptic->pdata->save_vib_event.EVENTS.FOLDER_STATE = 1; // init CLOSE
@@ -1053,6 +1107,7 @@ err_timed_output_register:
 	if (haptic->pdata->hap_mode == S2MU106_HAPTIC_LRA)
 		pwm_free(haptic->pwm);
 err_kthread:
+	haptic = NULL;
 	return error;
 }
 
@@ -1074,6 +1129,12 @@ static int s2mu106_haptic_suspend(struct device *dev)
 	struct s2mu106_haptic_data *haptic = platform_get_drvdata(pdev);
 
 	pr_info("%s\n", __func__);
+
+	if (haptic == NULL) {
+		pr_info("%s: data is NULL, return\n", __func__);
+		return 0;
+	}
+
 	kthread_flush_worker(&haptic->kworker);
 	hrtimer_cancel(&haptic->timer);
 	s2mu106_haptic_onoff(haptic, false);

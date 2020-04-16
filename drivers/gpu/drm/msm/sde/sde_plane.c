@@ -3623,7 +3623,7 @@ static int _sde_plane_validate_shared_crtc(struct sde_plane *psde,
 			for (j = 0; j < MAX_DATA_PATH_PER_DSIPLAY; j++) {
 
 				if (splash_display->pipes[j].sspp == psde->pipe) {
-					SDE_ERROR_PLANE(psde,"pipe:%d used in cont-splash on crtc:%d\n",
+					SDE_DEBUG_PLANE(psde,"pipe:%d used in cont-splash on crtc:%d\n",
 						psde->pipe, splash_display->encoder->crtc->base.id);
 					return -EINVAL;
 				}
@@ -3854,6 +3854,9 @@ void sde_plane_flush(struct drm_plane *plane)
 {
 	struct sde_plane *psde;
 	struct sde_plane_state *pstate;
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd;
+#endif
 
 	if (!plane || !plane->state) {
 		SDE_ERROR("invalid plane\n");
@@ -3875,6 +3878,16 @@ void sde_plane_flush(struct drm_plane *plane)
 		_sde_plane_color_fill(psde, psde->color_fill, 0xFF);
 	else if (psde->pipe_hw && psde->csc_ptr && psde->pipe_hw->ops.setup_csc)
 		psde->pipe_hw->ops.setup_csc(psde->pipe_hw, psde->csc_ptr);
+	
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	if (plane->crtc) {
+		vdd = ss_get_vdd(plane->crtc->index);
+		if (vdd && vdd->force_white_flush) {
+			pr_err("force white flush!![%d]\n", plane->crtc->index);
+			_sde_plane_color_fill(psde, 0xFFFFFF, 0xFF);
+		}
+	}
+#endif
 
 	/* flag h/w flush complete */
 	if (plane->state)

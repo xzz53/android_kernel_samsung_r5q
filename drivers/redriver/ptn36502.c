@@ -231,6 +231,7 @@ static int ptn36502_set_gpios(struct device *dev)
 {
 	struct device_node *np = dev->of_node;
 	int ret = 0;
+	int scl, sda;
 
 	if (!redrv_data) {
 		pr_err("%s: Invalid redrv_data\n", __func__);
@@ -242,6 +243,8 @@ static int ptn36502_set_gpios(struct device *dev)
 	redrv_data->con_sel = 0;
 
 //	redrv_data->combo_redriver_en = of_get_named_gpio(np, "combo,ptn_en", 0);
+	scl = of_get_named_gpio(np, "combo,redriver_scl", 0);
+	sda = of_get_named_gpio(np, "combo,redriver_sda", 0);
 	redrv_data->redriver_en = of_get_named_gpio(np, "combo,redriver_en", 0);
 	redrv_data->con_sel = of_get_named_gpio(np, "combo,con_sel", 0);
 	
@@ -258,6 +261,16 @@ static int ptn36502_set_gpios(struct device *dev)
 
 	msleep(1000);
 */
+
+	if (scl > 0 && gpio_is_valid(scl))
+		gpio_direction_output(scl,1);
+	else
+		pr_info("%s: scl(%d) gpio is invalid\n", __func__, scl);
+	
+	if (sda > 0 && gpio_is_valid(sda))
+		gpio_direction_output(sda, 1);
+	else
+		pr_info("%s: sda(%d) gpio is invalid\n", __func__, sda);
 
 	if (gpio_is_valid(redrv_data->redriver_en)) {
 		ret = gpio_request(redrv_data->redriver_en, "ap7341d_redriver_en");

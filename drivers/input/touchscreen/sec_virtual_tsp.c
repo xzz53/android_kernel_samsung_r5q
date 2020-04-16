@@ -461,6 +461,9 @@ static struct sec_cmd tsp_commands[] = {
 	{SEC_CMD_H("singletap_enable", sec_virtual_tsp_dual_cmd),},
 	{SEC_CMD_H("set_touchable_area", sec_virtual_tsp_dual_cmd),},
 	{SEC_CMD("set_rear_selfie_mode", set_rear_selfie_mode),},
+#ifdef CONFIG_TOUCHSCREEN_FTS9CU80F_B
+	{SEC_CMD_H("ear_detect_enable", sec_virtual_tsp_dual_cmd),},
+#endif
 
 	/* run_xxx_read_all common */
 	{SEC_CMD("run_cs_raw_read_all", sec_virtual_tsp_switch_cmd),},
@@ -473,6 +476,9 @@ static struct sec_cmd tsp_commands[] = {
 	{SEC_CMD("run_cx_data_read_all", sec_virtual_tsp_main_cmd),},
 	{SEC_CMD("run_cx_gap_data_rx_all", sec_virtual_tsp_main_cmd),},
 	{SEC_CMD("run_cx_gap_data_tx_all", sec_virtual_tsp_main_cmd),},
+
+	/* only main */
+	/* only sub */
 
 #ifdef CONFIG_TOUCHSCREEN_SEC_TS_Y761_SUB
 	/* run_xxx_read_all sub(s.lsi) */

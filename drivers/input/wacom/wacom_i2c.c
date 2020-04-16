@@ -43,8 +43,9 @@ int get_lcd_info(char *arg);
 
 #define WACOM_I2C_RETRY		3
 
-#define WACOM_FW_PATH_SDCARD	"/sdcard/FIRMWARE/WACOM/wacom_firm.fw"
-#define WACOM_FW_PATH_FFU	"/spu/WACOM/ffu_wacom.bin"
+#define WACOM_PATH_EXTERNAL_FW			"/sdcard/FIRMWARE/WACOM/wacom.bin"
+#define WACOM_PATH_EXTERNAL_FW_SIGNED	"/sdcard/FIRMWARE/WACOM/wacom_signed.bin"
+#define WACOM_PATH_SPU_FW_SIGNED		"/spu/WACOM/ffu_wacom.bin"
 
 #define WACOM_INVALID_IRQ_COUNT	2
 
@@ -2027,7 +2028,8 @@ static int load_fw_sdcard(struct wacom_i2c *wac_i2c, const char *file_path)
 	input_info(true, &client->dev, "start, file path %s, size %ld Bytes\n",
 		   file_path, fsize);
 
-	if (strncmp(file_path, WACOM_FW_PATH_FFU, 25) == 0) {
+	if (strncmp(file_path, WACOM_PATH_EXTERNAL_FW_SIGNED, strlen(WACOM_PATH_EXTERNAL_FW_SIGNED)) == 0
+		|| strncmp(file_path, WACOM_PATH_SPU_FW_SIGNED, strlen(WACOM_PATH_SPU_FW_SIGNED)) == 0) {
 		/* name 5, digest 32, signature 512 */
 		spu_fsize = fsize;
 		fsize -= SPU_METADATA_SIZE(WACOM);
@@ -2047,7 +2049,8 @@ static int load_fw_sdcard(struct wacom_i2c *wac_i2c, const char *file_path)
 		goto out;
 	}
 
-	if (strncmp(file_path, WACOM_FW_PATH_FFU, 25) == 0) {
+	if (strncmp(file_path, WACOM_PATH_EXTERNAL_FW_SIGNED, strlen(WACOM_PATH_EXTERNAL_FW_SIGNED)) == 0
+		|| strncmp(file_path, WACOM_PATH_SPU_FW_SIGNED, strlen(WACOM_PATH_SPU_FW_SIGNED)) == 0) {
 		spu_ums_data = kzalloc(spu_fsize, GFP_KERNEL);
 		if (!spu_ums_data) {
 			input_err(true, &client->dev, "%s, kzalloc failed\n", __func__);
@@ -2146,10 +2149,13 @@ int wacom_i2c_load_fw(struct wacom_i2c *wac_i2c, u8 fw_path)
 		ret = load_fw_built_in(wac_i2c, fw_path);
 		break;
 	case FW_IN_SDCARD:
-		ret = load_fw_sdcard(wac_i2c, WACOM_FW_PATH_SDCARD);
+		ret = load_fw_sdcard(wac_i2c, WACOM_PATH_EXTERNAL_FW);
 		break;
-	case FW_FFU:
-		ret = load_fw_sdcard(wac_i2c, WACOM_FW_PATH_FFU);
+	case FW_IN_SDCARD_SIGNED:
+		ret = load_fw_sdcard(wac_i2c, WACOM_PATH_EXTERNAL_FW_SIGNED);
+		break;
+	case FW_SPU:
+		ret = load_fw_sdcard(wac_i2c, WACOM_PATH_SPU_FW_SIGNED);
 		break;
 	default:
 		input_info(true, &client->dev, "unknown path(%d)\n", fw_path);
@@ -2165,9 +2171,9 @@ int wacom_i2c_load_fw(struct wacom_i2c *wac_i2c, u8 fw_path)
 	if (fw_img->hdr_ver == 1 && fw_img->hdr_len == sizeof(struct fw_image)) {
 		wac_i2c->fw_data = (u8 *) fw_img->data;
 #if !defined(CONFIG_SEC_FACTORY)
-		if ((fw_path == FW_BUILT_IN) || (fw_path == FW_FFU)) {
+		if (fw_path == FW_BUILT_IN) {
 #else
-		if ((fw_path == FW_BUILT_IN) || (fw_path == FW_FFU) ||
+		if ((fw_path == FW_BUILT_IN) ||
 		    (fw_path == FW_FACTORY_UNIT) || (fw_path == FW_FACTORY_GARAGE)) {
 #endif
 			wac_i2c->fw_ver_bin = fw_img->fw_ver1;
@@ -2196,7 +2202,8 @@ void wacom_i2c_unload_fw(struct wacom_i2c *wac_i2c)
 		release_firmware(wac_i2c->firm_data);
 		break;
 	case FW_IN_SDCARD:
-	case FW_FFU:
+	case FW_IN_SDCARD_SIGNED:
+	case FW_SPU:
 		kfree(wac_i2c->fw_img);
 		break;
 	default:
@@ -2259,7 +2266,7 @@ int wacom_fw_update(struct wacom_i2c *wac_i2c, u8 fw_update_way, bool bforced)
 	}
 
 	/* If FFU firmware version is lower than IC's version, do not run update routine */
-	if (fw_update_way == FW_FFU && fw_ver_ic >= wac_i2c->fw_ver_bin) {
+	if (fw_update_way == FW_SPU && fw_ver_ic >= wac_i2c->fw_ver_bin) {
 		input_info(true, &client->dev, "FFU. update is skipped\n");
 		wac_i2c->update_status = FW_UPDATE_PASS;
 

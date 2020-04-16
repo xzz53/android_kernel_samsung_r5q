@@ -1201,8 +1201,8 @@ struct ufs_hba {
 
 	unsigned int lc_info;
 	bool support_tw;
-	bool tw_state_is_changing;
 	bool tw_state_not_allowed;
+	struct mutex tw_ctrl_mutex;
 	struct SEC_UFS_TW_info SEC_tw_info;
 	struct SEC_UFS_TW_info SEC_tw_info_old;
 

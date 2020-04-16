@@ -8,6 +8,15 @@
 #include <linux/proc_fs.h>
 #include <linux/power_supply.h>
 
+#define TSP_TYPE_BUILTIN_FW		0
+#define TSP_TYPE_EXTERNAL_FW		1
+#define TSP_TYPE_EXTERNAL_FW_SIGNED	2
+#define TSP_TYPE_SPU_FW_SIGNED		3
+
+#define TSP_PATH_EXTERNAL_FW		"/sdcard/Firmware/TSP/tsp.bin"
+#define TSP_PATH_EXTERNAL_FW_SIGNED	"/sdcard/Firmware/TSP/tsp_signed.bin"
+#define TSP_PATH_SPU_FW_SIGNED		"/spu/TSP/ffu_tsp.bin"
+
 #if defined(CONFIG_FOLDER_HALL) && defined(CONFIG_TOUCHSCREEN_DUAL_FOLDABLE)
 #include <linux/hall.h>
 #endif
@@ -98,6 +107,7 @@
 #define FTS_CMD_WRITE_COORDINATE_FILTER			0x3A
 
 #define FTS_CMD_SET_EAR_DETECT				0x41
+#define FTS_CMD_SET_PROX_POWER_OFF			0x42
 
 #define FTS_READ_ONE_EVENT				0x60
 #define FTS_READ_ALL_EVENT				0x61
@@ -637,6 +647,7 @@ struct fts_i2c_platform_data {
 	bool support_ear_detect;
 	bool sync_reportrate_120;
 	bool enable_settings_aot;
+	bool support_hall_ic;
 	int max_x;
 	int max_y;
 	u8 panel_revision;	/* to identify panel info */
@@ -770,15 +781,17 @@ struct fts_ts_info {
 	int tspid2_val;
 
 	struct notifier_block nb;
-//#ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
+#ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
 	int flip_status_prev;
 	int flip_status;
 	int flip_status_current;
 	int change_flip_status;
 	struct mutex switching_mutex;
 	struct delayed_work switching_work;
+#ifdef CONFIG_FOLDER_HALL
 	struct notifier_block hall_ic_nb;
-//#endif
+#endif
+#endif
 #ifdef USE_OPEN_DWORK
 	struct delayed_work open_work;
 #endif
@@ -812,6 +825,7 @@ struct fts_ts_info {
 	struct mutex device_mutex;
 	struct mutex eventlock;
 	struct mutex status_mutex;
+	struct mutex wait_for;
 	bool reinit_done;
 	bool info_work_done;
 
@@ -878,6 +892,8 @@ struct fts_ts_info {
 	bool fix_active_mode;
 	bool touch_aging_mode;
 
+	u8 sip_mode;
+
 	bool rawcap_lock;
 	int rawcap_max;
 	int rawcap_max_tx;
@@ -908,7 +924,7 @@ int fts_fw_update_on_hidden_menu(struct fts_ts_info *info, int update_type);
 void fts_reinit(struct fts_ts_info *info, bool delay);
 int fts_execute_autotune(struct fts_ts_info *info, bool IsSaving);
 int fts_fw_wait_for_event(struct fts_ts_info *info, u8 *result, u8 result_cnt);
-int fts_fw_wait_for_echo_event(struct fts_ts_info *info, u8 *cmd, u8 cmd_cnt);
+int fts_fw_wait_for_echo_event(struct fts_ts_info *info, u8 *cmd, u8 cmd_cnt, int delay);
 int fts_irq_enable(struct fts_ts_info *info, bool enable);
 int fts_set_calibration_information(struct fts_ts_info *info, u8 count, u16 version);
 int fts_get_tsp_test_result(struct fts_ts_info *info);

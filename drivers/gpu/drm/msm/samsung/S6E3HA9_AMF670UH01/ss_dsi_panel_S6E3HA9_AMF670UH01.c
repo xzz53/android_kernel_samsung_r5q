@@ -611,6 +611,16 @@ static struct dsi_panel_cmd_set *ss_acl_on(struct samsung_display_driver_data *v
 		return NULL;
 	}
 
+	if (vdd->br.bl_level > 25500) { /* HBM */
+		pcmds->cmds[0].msg.tx_buf[3] = 0x80;	/* use hbm acl statr step 60% */
+		pcmds->cmds[0].msg.tx_buf[4] = 0x65;	/* use hbm acl statr step 60% */
+		pcmds->cmds[0].msg.tx_buf[6] = 0x26;	/* 8% */
+	} else { /* Normal */
+		pcmds->cmds[0].msg.tx_buf[3] = 0x40;	/* use hbm acl statr step 60% */
+		pcmds->cmds[0].msg.tx_buf[4] = 0xFF;	/* use hbm acl statr step 60% */
+		pcmds->cmds[0].msg.tx_buf[6] = 0x50;	/* 15% */ 
+	}
+
 	LCD_INFO("gradual_acl: %d, acl per: 0x%x",
 			vdd->gradual_acl_val, pcmds->cmds[0].msg.tx_buf[6]);
 

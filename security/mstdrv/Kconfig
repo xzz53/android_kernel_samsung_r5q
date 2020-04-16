@@ -15,7 +15,7 @@ config MST_LDO
 	bool "MST LDO kernel driver"
 	depends on !(SEC_BOLTQ5G_PROJECT) && !(SEC_GTS5L_PROJECT) && !(SEC_GTS5LWIFI_PROJECT) \
 			&& !(SEC_GTS6L_PROJECT) && !(SEC_GTS6LWIFI_PROJECT) && !(SEC_R3Q_PROJECT && !(MACH_R3Q_KOR_SINGLE)) \
-			&& !(SEC_R5Q_PROJECT && !(MACH_R5Q_EUR_OPEN)) && !(SEC_GTS6X_PROJECT) && !(SEC_ZODIAC_PROJECT)
+			&& !(SEC_R5Q_PROJECT && !(MACH_R5Q_EUR_OPEN) && !(MACH_R5Q_USA_OPEN)) && !(SEC_GTS6X_PROJECT) && !(SEC_ZODIAC_PROJECT)
 	default n
 	help
 	This enables the MST LDO kernel driver

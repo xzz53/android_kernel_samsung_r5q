@@ -17447,17 +17447,18 @@ static int msm_routing_put_lsm_app_type_cfg_control(
 	int shift = ((struct soc_multi_mixer_control *)
 				kcontrol->private_value)->shift;
 	int i = 0, j;
-	int num_app_types = ucontrol->value.integer.value[i++];
+	int num_app_types;
 
-	memset(lsm_app_type_cfg, 0, MAX_APP_TYPES*
-	       sizeof(struct msm_pcm_routing_app_type_data));
-
-	if (num_app_types > MAX_APP_TYPES) {
+	if (ucontrol->value.integer.value[0] > MAX_APP_TYPES) {
 		pr_err("%s: number of app types exceed the max supported\n",
 			__func__);
 		return -EINVAL;
 	}
 
+	num_app_types = ucontrol->value.integer.value[i++];
+	memset(lsm_app_type_cfg, 0, MAX_APP_TYPES*
+		sizeof(struct msm_pcm_routing_app_type_data));
+	
 	for (j = 0; j < num_app_types; j++) {
 		lsm_app_type_cfg[j].app_type =
 				ucontrol->value.integer.value[i++];
@@ -17810,6 +17811,33 @@ done:
 	return ret;
 }
 EXPORT_SYMBOL(q6audio_get_copp_idx_from_port_id);
+
+int sec_get_copp_idx(int port_id, int func_type)
+{
+	int idx, copp_idx;
+	int ret = 0;
+
+	pr_info("%s: port_id=0x%x, func_type=%d\n",
+		__func__, port_id, func_type);
+
+	ret = msm_audio_get_copp_idx_from_port_id(port_id, func_type,
+					    &copp_idx);
+	if (ret) {
+		pr_err("%s: Could not get copp idx for port_id=%d\n",
+			__func__, port_id);
+	
+		idx = -EINVAL;
+		goto done;
+	}	
+
+	idx = copp_idx;
+	pr_info("%s: copp_idx=%d\n", __func__, idx);
+
+done:
+	return idx;
+}
+EXPORT_SYMBOL(sec_get_copp_idx);
+
 #endif
 
 static int msm_audio_sound_focus_derive_port_id(struct snd_kcontrol *kcontrol,

@@ -401,9 +401,10 @@ static void input_handle_event(struct input_dev *dev,
 	}
 
 	if (disposition & INPUT_FLUSH) {
-		if (dev->num_vals >= 2)
+		if (dev->num_vals >= 2) {
 			input_pass_values(dev, dev->vals, dev->num_vals);
-		dev->prev_num_vals = dev->num_vals;
+			dev->prev_num_vals = dev->num_vals;
+		}
 		dev->num_vals = 0;
 	} else if (dev->num_vals >= dev->max_vals - 2) {
 		dev->vals[dev->num_vals++] = input_value_sync;
@@ -505,31 +506,32 @@ DECLARE_STATE_FUNC(press)
 	}
 }
 /**
- 
  * get_device_type : Define type of device for input_booster.
  * dev : Current device that in which input events triggered.
  * trgt_gender : The device_tree_gender struct of target device to change device information while input_booster works.
  * trgt_booster : The device_booster struct of targer device to change device information same as trget_gender.
  * ret_val : Booster_ON : 1, Booster_OFF : 0.
- 
 **/
 
 int get_device_type(struct input_dev *dev){
 	int i;
 	int ret_val = -1;
 
-    if( dev == NULL)
-        return ret_val;
-	
+	if (dev == NULL)
+		return ret_val;
+
+	/* Initializing device type before finding the proper device type. */
+	dev->device_type = NONE_TYPE_DEVICE;
+
 	for (i = 0; i < dev->prev_num_vals && i < MAX_EVENTS; i++) {
-		
+
 		pr_booster("[Input Data] Touch Type : %d, Code : %d, Value : %d \n", dev->vals[i].type, dev->vals[i].code, dev->vals[i].value);
-		
-		if(dev->device_type != NONE_TYPE_DEVICE && dev->device_type != TOUCH && dev->device_type != MULTI_TOUCH){
+
+		if (dev->device_type != NONE_TYPE_DEVICE && dev->device_type != TOUCH && dev->device_type != MULTI_TOUCH) {
 			pr_booster("[Input Booster2] Device type Find - ret_val : %d, device_type : %d \n", ret_val, dev->device_type);
 			return ret_val;
 		}
-		if(dev->vals[i].type == EV_KEY){
+		if (dev->vals[i].type == EV_KEY) {
 			switch (dev->vals[i].code) {
 				case BTN_TOUCH:
 					if (i+1 < dev->prev_num_vals && i+1 < dev->max_vals) {
@@ -555,79 +557,79 @@ int get_device_type(struct input_dev *dev){
 				case KEY_HOMEPAGE:
 				case KEY_RECENT:
 					dev->device_type = TOUCH_KEY;
-					if (dev->vals[i].value){
+					if (dev->vals[i].value) {
 						ret_val = 1;
-					}else{
+					} else {
 						ret_val = 0;
-					}	
+					}
 					break;
 				case KEY_VOLUMEUP:
 				case KEY_VOLUMEDOWN:
 				case KEY_POWER:
 				case KEY_WINK:
 					dev->device_type = KEY;
-					if (dev->vals[i].value){
+					if (dev->vals[i].value) {
 						ret_val = 1;
-					}else{
+					} else {
 						ret_val = 0;
-					}					
+					}
 					break;
 				default:
 					break;
 			}
-		} else if(dev->vals[i].type == EV_ABS){
+		} else if (dev->vals[i].type == EV_ABS) {
 			switch (dev->vals[i].code) {
 				case ABS_MT_TRACKING_ID:
-					if( dev->vals[i].value >= 0 ){ // ***************** Checking if Touch-Slot Exists
+					if ( dev->vals[i].value >= 0 ) { /* Checking if Touch-Slot Exists */
 						dev->touch_slot_cnt++;
-					}else{
+					} else {
 						dev->touch_slot_cnt--;
 					}
-					if( dev->touch_slot_cnt <= MAX_EVENTS){						
-						if( dev->vals[i].value > 0 ){
+					if ( dev->touch_slot_cnt <= MAX_EVENTS) {
+						if ( dev->vals[i].value > 0 ) {
 							ret_val = 1;
-							if (dev->touch_slot_cnt == 1){
+							if (dev->touch_slot_cnt == 1) {
 								dev->device_type = TOUCH;
-							}else if(dev->touch_slot_cnt >= 2) {
+							} else if(dev->touch_slot_cnt >= 2) {
 								dev->device_type = MULTI_TOUCH;
 							}
-						}else{
-							if (dev->touch_slot_cnt == 0){
+						} else {
+							if (dev->touch_slot_cnt == 0) {
 								ret_val = 0;
 								dev->device_type = TOUCH;
-							}else if(dev->touch_slot_cnt == 1) {
+							} else if (dev->touch_slot_cnt == 1) {
 								ret_val = 0;
 								dev->device_type = MULTI_TOUCH;
 							}
 						}
 					}
 			}
-		}else if(dev->vals[i].type == EV_MSC && dev->vals[i].code == MSC_SCAN){ 
+		} else if (dev->vals[i].type == EV_MSC && dev->vals[i].code == MSC_SCAN) {
 			if (i+1 < dev->prev_num_vals && i+1 < dev->max_vals) {
 				if (dev->vals[i+1].type == EV_KEY) {
 					switch (dev->vals[i+1].code) {
-					case BTN_LEFT: // ***************** Checking Touch Button Event
+					case BTN_LEFT: /* Checking Touch Button Event */
 					case BTN_RIGHT:
 					case BTN_MIDDLE:
 						dev->device_type = MOUSE;
-						if (dev->vals[i+1].value){
+						if (dev->vals[i+1].value) {
 							ret_val = 1;
-						}else{
+						} else {
 							ret_val = 0;
-						}						
+						}
 						break;
-					default: // ***************** Checking Keyboard Event
+					default: /* Checking Keyboard Event */
 						dev->device_type = KEYBOARD;
-						if (dev->vals[i+1].value){
+						if (dev->vals[i+1].value) {
 							ret_val = 1;
-						}else{
+						} else {
 							ret_val = 0;
 						}
 						break;
 					}
 				}
 			}
-		}else if(dev->vals[i].type == EV_REL && dev->vals[i].code == REL_WHEEL && dev->vals[i].value){
+		} else if (dev->vals[i].type == EV_REL && dev->vals[i].code == REL_WHEEL && dev->vals[i].value) {
 			dev->device_type = MOUSH_WHEEL;
 			ret_val = 1;
 		}
@@ -665,11 +667,6 @@ void input_booster(struct input_dev *dev)
 			device_type_infos[dev->device_type].input_booster->multi_events++;
 		}else {
 			device_type_infos[dev->device_type].input_booster->multi_events--;
-		}
-
-		if(&device_type_infos[dev->device_type].input_booster->input_booster_set_booster_work == NULL){
-			pr_err("[Input Booster2] Work Struct is null And %s Event - %s :::: device_type : %d \n", device_type_infos[dev->device_type].input_booster_dt->pDT->label, (enable) ? "PRESS" : "RELEASE", dev->device_type);
-			return;
 		}
 		schedule_work(&device_type_infos[dev->device_type].input_booster->input_booster_set_booster_work);
 	}
@@ -871,16 +868,15 @@ void input_event(struct input_dev *dev,
 
 		spin_lock_irqsave(&dev->event_lock, flags);
 		input_handle_event(dev, type, code, value);
-		spin_unlock_irqrestore(&dev->event_lock, flags);
 
 		if (device_tree_infor != NULL) {
 			if(dev->num_vals == 0 && dev->prev_num_vals > 0 ){
 				pr_booster("[Input Booster1] ==============================================\n");
-				dev->device_type = NONE_TYPE_DEVICE;
 				input_booster(dev);
 				dev->prev_num_vals = 0;
 			}
 		}
+		spin_unlock_irqrestore(&dev->event_lock, flags);
 	}
 }
 EXPORT_SYMBOL(input_event);
@@ -912,16 +908,14 @@ void input_inject_event(struct input_handle *handle,
 			input_handle_event(dev, type, code, value);
 		rcu_read_unlock();
 
-		spin_unlock_irqrestore(&dev->event_lock, flags);		
-		
 		if (device_tree_infor != NULL) {
 			if(enable_event_booster && dev->num_vals == 0 && dev->prev_num_vals > 0 ){
 				pr_booster("[Input Booster1] ==============================================\n");
-				dev->device_type = NONE_TYPE_DEVICE;				
 				input_booster(dev);
 				dev->prev_num_vals = 0;
 			}
 		}
+		spin_unlock_irqrestore(&dev->event_lock, flags);
 	}
 }
 EXPORT_SYMBOL(input_inject_event);

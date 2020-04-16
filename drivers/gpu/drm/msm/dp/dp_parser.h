@@ -247,6 +247,7 @@ struct dp_parser {
 	bool aux_sel_inv;	/* inverse control of AUX_SEL e.g. D2Xq hwid 01,02 */
 	bool aux_sw_redrv;	/* true if both aux switch and redriver are used, e.g. T865 */
 	int  dex_dft_res;	/* DeX default resolution, e.g. normal dongle such as HG950 */
+	bool prefer_res;	/* true if prefer resolution has high priority */
 #endif
 
 	int (*parse)(struct dp_parser *parser);

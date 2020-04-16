@@ -5453,11 +5453,13 @@ void ufshcd_tw_ctrl(struct scsi_device *sdev, int en)
 {
 	int err;
 	struct ufs_hba *hba;
+	bool has_lock = false;
 
 	hba = shost_priv(sdev->host);
 
-	hba->tw_state_is_changing = true;
-	mb();
+	mutex_lock(&hba->tw_ctrl_mutex);
+	has_lock = true;
+
 	pr_err("UFS: try TW %s.\n", en ? "On" : "Off");
 
 	if (!hba->support_tw)
@@ -5534,9 +5536,18 @@ void ufshcd_tw_ctrl(struct scsi_device *sdev, int en)
 	}
 	SEC_ufs_update_tw_info(hba, 0);
 out_rpm_put:
+	/*
+	 * tw_ctrl_mutex must be unlocked before the pm_runtime_put_sync() is called
+	 * to prevent deadlock issue.
+	 *
+	 * ufshcd_suspend() calls mutex_lock(&hba->tw_ctrl_mutex)
+	 */
+	mutex_unlock(&hba->tw_ctrl_mutex);
+	has_lock = false;
 	pm_runtime_put_sync(hba->dev);
 out:
-	hba->tw_state_is_changing = false;
+	if (has_lock)
+		mutex_unlock(&hba->tw_ctrl_mutex);
 }
 
 static void ufshcd_reset_tw(struct ufs_hba *hba, bool force)
@@ -11210,6 +11221,7 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 	struct scsi_device *sdp;
 	unsigned long flags;
 	int ret;
+	int retries = 0;
 
 	spin_lock_irqsave(hba->host->host_lock, flags);
 	sdp = hba->sdev_ufs_device;
@@ -11244,19 +11256,23 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 
 	cmd[4] = pwr_mode << 4;
 
-	/*
-	 * Current function would be generally called from the power management
-	 * callbacks hence set the RQF_PM flag so that it doesn't resume the
-	 * already suspended childs.
-	 */
-	ret = scsi_execute(sdp, cmd, DMA_NONE, NULL, 0, NULL, &sshdr,
-			UFS_START_STOP_TIMEOUT, 2, 0, RQF_PM, NULL);
-	if (ret) {
-		sdev_printk(KERN_WARNING, sdp,
-			    "START_STOP failed for power mode: %d, result %x\n",
-			    pwr_mode, ret);
-		if (driver_byte(ret) & DRIVER_SENSE)
-			scsi_print_sense_hdr(sdp, NULL, &sshdr);
+	for (retries = 0; retries < 3; retries++) {
+		/*
+		 * Current function would be generally called from the power management
+		 * callbacks hence set the RQF_PM flag so that it doesn't resume the
+		 * already suspended childs.
+		 */
+		ret = scsi_execute(sdp, cmd, DMA_NONE, NULL, 0, NULL, &sshdr,
+				UFS_START_STOP_TIMEOUT, 2, 0, RQF_PM, NULL);
+		if (ret) {
+			sdev_printk(KERN_WARNING, sdp,
+					"START_STOP failed for power mode: %d, result %x, retries : %d\n",
+					pwr_mode, ret, retries);
+			if (driver_byte(ret) & DRIVER_SENSE)
+				scsi_print_sense_hdr(sdp, NULL, &sshdr);
+		} else {
+			break;
+		}
 	}
 
 	if (!ret)
@@ -11418,14 +11434,15 @@ static int ufshcd_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	enum ufs_dev_pwr_mode req_dev_pwr_mode;
 	enum uic_link_state req_link_state;
 
-	hba->pm_op_in_progress = 1;
-	if (hba->tw_state_is_changing) {
-		dev_err(hba->dev, "%s: TW state %s return %d.\n",
-				__func__, hba->tw_state_is_changing ? "changing" : "none",
-				-EBUSY);
-		ret = -EBUSY;
-		goto out;
+	if (!mutex_trylock(&hba->tw_ctrl_mutex)) {
+		dev_err(hba->dev, "%s has failed %d.\n", __func__, -EBUSY);
+		return -EBUSY;
 	}
+
+	if (ufshcd_is_system_pm(pm_op))
+		dev_info(hba->dev, "%s: enter.\n", __func__);
+
+	hba->pm_op_in_progress = 1;
 
 	if (!ufshcd_is_shutdown_pm(pm_op)) {
 		pm_lvl = ufshcd_is_runtime_pm(pm_op) ?
@@ -11500,6 +11517,8 @@ static int ufshcd_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 			goto enable_gating;
 	}
 
+	ufshcd_scsi_block_requests(hba);
+
 	ret = ufshcd_link_state_transition(hba, req_link_state, 1);
 	if (ret)
 		goto set_dev_active;
@@ -11557,6 +11576,7 @@ set_link_active:
 		ufshcd_host_reset_and_restore(hba);
 	}
 set_dev_active:
+	ufshcd_scsi_unblock_requests(hba);
 	if (!ufshcd_set_dev_pwr_mode(hba, UFS_ACTIVE_PWR_MODE))
 		ufshcd_disable_auto_bkops(hba);
 enable_gating:
@@ -11570,6 +11590,7 @@ out:
 		hba->tw_state_not_allowed = true;
 
 	hba->pm_op_in_progress = 0;
+	mutex_unlock(&hba->tw_ctrl_mutex);
 
 	if (ret)
 		ufshcd_update_error_stats(hba, UFS_ERR_SUSPEND);
@@ -11596,6 +11617,7 @@ static int ufshcd_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	old_link_state = hba->uic_link_state;
 
 	ufshcd_hba_vreg_set_hpm(hba);
+	ufshcd_scsi_unblock_requests(hba);
 	/* Make sure clocks are enabled before accessing controller */
 	ret = ufshcd_enable_clocks(hba);
 	if (ret)
@@ -12758,6 +12780,9 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 
 	/* Initialize mutex for device management commands */
 	mutex_init(&hba->dev_cmd.lock);
+
+	/* Initialize TW ctrl mutex */
+	mutex_init(&hba->tw_ctrl_mutex);
 
 	init_rwsem(&hba->lock);
 

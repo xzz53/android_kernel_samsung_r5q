@@ -32,7 +32,7 @@ fw-shipped-$(CONFIG_EPEN_WACOM_W9020) += epen/w9020_d2.fw epen/w9020_d1.fw
 ifdef CONFIG_SEC_FACTORY
 fw-shipped-$(CONFIG_EPEN_WACOM_W9020) += epen/w9020_d2_unit.fw epen/w9020_d1_unit.fw
 endif
-fw-shipped-$(CONFIG_EPEN_WACOM_W9021) += epen/w9021_gts5l.fw
+fw-shipped-$(CONFIG_EPEN_WACOM_W9021) += epen/w9021_gts5l.fw epen/w9021_gts6x.fw
 
 fw-external-$(CONFIG_TOUCHSCREEN_IST40XX) += tsp_imagis/ist40xx_a905g.bin tsp_imagis/ist40xx_a905g_cmcs.bin
 fw-shipped-$(CONFIG_TOUCHSCREEN_MELFAS_MSS100) += tsp_melfas/mss100_r3.fw

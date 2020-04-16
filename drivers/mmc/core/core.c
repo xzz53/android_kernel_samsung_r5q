@@ -3261,7 +3261,8 @@ int mmc_resume_bus(struct mmc_host *host)
 		if (!card_present) {
 			pr_err("%s: Card removed - card_present:%d\n",
 			       mmc_hostname(host), card_present);
-			mmc_card_set_removed(host->card);
+			if (host->card)
+				mmc_card_set_removed(host->card);
 		}
 	}
 

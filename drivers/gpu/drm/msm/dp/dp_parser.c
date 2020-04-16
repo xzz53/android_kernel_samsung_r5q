@@ -869,6 +869,10 @@ static void secdp_parse_misc(struct dp_parser *parser)
 	pr_debug("secdp,dex-dft-res: %s, %s\n", data,
 		secdp_dex_res_to_string(parser->dex_dft_res));
 
+	parser->prefer_res = of_property_read_bool(dev->of_node,
+			"secdp,prefer-res");
+	pr_debug("secdp,prefer-res: %d\n", parser->prefer_res);
+
 	return;
 }
 #endif

@@ -867,8 +867,11 @@ static void log_failure_reason(const struct pil_tz_data *d)
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
 
 #ifdef CONFIG_SENSORS_SSC
-	if (!strncmp(name, "slpi", 4))
+	if (!strncmp(name, "slpi", 4)) {
 		ssr_reason_call_back(reason, min(size, (size_t)MAX_SSR_REASON_LEN));
+		if (strstr(reason, "IPLSREVOCER"))
+			subsys_set_fssr(d->subsys, true);
+	}
 #endif
 }
 

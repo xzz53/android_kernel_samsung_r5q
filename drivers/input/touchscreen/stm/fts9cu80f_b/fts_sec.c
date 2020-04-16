@@ -115,6 +115,7 @@ static void run_self_raw_read_all(void *device_data);
 static void run_trx_short_test(void *device_data);
 static void check_connection(void *device_data);
 static void get_cx_data(void *device_data);
+static void run_active_cx_data_read(void *device_data);
 static void run_cx_data_read(void *device_data);
 static void get_cx_all_data(void *device_data);
 static void run_cx_gap_data_x_all(void *device_data);
@@ -130,6 +131,7 @@ static void increase_disassemble_count(void *device_data);
 static void get_disassemble_count(void *device_data);
 static void get_osc_trim_error(void *device_data);
 static void get_osc_trim_info(void *device_data);
+static void run_elvss_test(void *device_data);
 
 #ifdef CONFIG_GLOVE_TOUCH
 static void glove_mode(void *device_data);
@@ -161,6 +163,7 @@ static void fix_active_mode(void *device_data);
 static void touch_aging_mode(void *device_data);
 static void set_rear_selfie_mode(void *device_data);
 static void ear_detect_enable(void *device_data);
+static void set_sip_mode(void *device_data);
 static void not_support_cmd(void *device_data);
 
 static ssize_t fts_scrub_position(struct device *dev,
@@ -218,6 +221,7 @@ struct sec_cmd ft_commands[] = {
 	{SEC_CMD("run_trx_short_test", run_trx_short_test),},
 	{SEC_CMD("check_connection", check_connection),},
 	{SEC_CMD("get_cx_data", get_cx_data),},
+	{SEC_CMD("run_active_cx_data_read", run_active_cx_data_read),},
 	{SEC_CMD("run_cx_data_read", run_cx_data_read),},
 	{SEC_CMD("run_cx_data_read_all", get_cx_all_data),},
 	{SEC_CMD("get_cx_all_data", get_cx_all_data),},
@@ -232,6 +236,7 @@ struct sec_cmd ft_commands[] = {
 	{SEC_CMD("get_disassemble_count", get_disassemble_count),},
 	{SEC_CMD("get_osc_trim_error", get_osc_trim_error),},
 	{SEC_CMD("get_osc_trim_info", get_osc_trim_info),},
+	{SEC_CMD("run_elvss_test", run_elvss_test),},
 #ifdef CONFIG_GLOVE_TOUCH
 	{SEC_CMD_H("glove_mode", glove_mode),},
 #endif
@@ -261,6 +266,7 @@ struct sec_cmd ft_commands[] = {
 	{SEC_CMD("touch_aging_mode", touch_aging_mode),},
 	{SEC_CMD_H("set_rear_selfie_mode", set_rear_selfie_mode),},
 	{SEC_CMD_H("ear_detect_enable", ear_detect_enable),},
+	{SEC_CMD("set_sip_mode", set_sip_mode),},
 	{SEC_CMD("not_support_cmd", not_support_cmd),},
 };
 
@@ -572,22 +578,27 @@ static ssize_t sensitivity_mode_show(struct device *dev,
 	s16 value[10];
 	u8 count = 9;
 	char *buffer;
-
-	rbuf = kzalloc(count * 2, GFP_KERNEL);
-	if (!rbuf)
-		return -ENOMEM;
-
-	buffer = kzalloc(SEC_CMD_BUF_SIZE, GFP_KERNEL);
-	if (!buffer)
-		return -ENOMEM;
+	ssize_t len;
 
 	if (info->fts_power_state == FTS_POWER_STATE_POWERDOWN) {
 		input_err(true, &info->client->dev, "%s: [ERROR] Touch is stopped\n", __func__);
 		return -EPERM;
 	}
 
+	rbuf = kzalloc(count * 2, GFP_KERNEL);
+	if (!rbuf)
+		return -ENOMEM;
+
+	buffer = kzalloc(SEC_CMD_BUF_SIZE, GFP_KERNEL);
+	if (!buffer) {
+		kfree(rbuf);
+		return -ENOMEM;
+	}
+
 	ret = info->fts_read_reg(info, &reg_read, 1, rbuf, count * 2);
 	if (ret < 0) {
+		kfree(rbuf);
+		kfree(buffer);
 		input_err(true, &info->client->dev, "%s: read failed ret = %d\n", __func__, ret);
 		return ret;
 	}
@@ -602,8 +613,12 @@ static ssize_t sensitivity_mode_show(struct device *dev,
 	}
 
 	input_info(true, &info->client->dev, "%s: %s\n", __func__, buffer);
+	len = snprintf(buf, SEC_CMD_BUF_SIZE, buffer);
 
-	return snprintf(buf, SEC_CMD_BUF_SIZE, buffer);
+	kfree(rbuf);
+	kfree(buffer);
+
+	return len;
 }
 
 /*
@@ -651,14 +666,7 @@ ssize_t get_lp_dump(struct device *dev, struct device_attribute *attr, char *buf
 	u16 addr;
 	u8 buffer[30];
 	u8 position = FTS_SPONGE_LP_DUMP_DATA_FORMAT_10_LEN;
-	/* ~ dreamlite : data format 8, ~ : data format 10
-	 */
-/*
-	if (dump_format == 10)
-		position = FTS_SPONGE_LP_DUMP_DATA_FORMAT_10_LEN;
-	else
-		position = FTS_SPONGE_LP_DUMP_DATA_FORMAT_8_LEN;
-*/
+
 	if (!sec)
 		return -ENODEV;
 
@@ -715,14 +723,6 @@ ssize_t get_lp_dump(struct device *dev, struct device_attribute *attr, char *buf
 		goto out;
 	}
 
-	/* ~ dreamlite : data format 8, ~ : data format 10
-	 */
-/*
-	if (dump_format == 10)
-		position = FTS_SPONGE_LP_DUMP_DATA_FORMAT_10_LEN;
-	else
-		position = FTS_SPONGE_LP_DUMP_DATA_FORMAT_8_LEN;
-*/
 	current_index = (string_data[3] & 0xFF) << 8 | (string_data[2] & 0xFF);
 	if (current_index > dump_end || current_index < dump_start) {
 		input_err(true, &info->client->dev,
@@ -1001,6 +1001,7 @@ static ssize_t ear_detect_enable_store(struct device *dev,
 
 	return count;
 }
+
 /* SELFTEST FAIL HISTORY : 34 byte * 6 EA */
 static int get_selftest_fail_hist_dump(struct fts_ts_info *info, char *buf, u8 position)
 {
@@ -1013,25 +1014,21 @@ static int get_selftest_fail_hist_dump(struct fts_ts_info *info, char *buf, u8 p
 	u8 temp_result;
 
 	if (info->fts_power_state != FTS_POWER_STATE_ACTIVE) {
-//		snprintf(buf, SEC_CMD_BUF_SIZE, "TSP is not ACTIVE mode");
 		input_err(true, &info->client->dev, "%s: TSP is not ACTIVE mode\n", __func__);
 		return -EPERM;
 	}
 
 	if (info->reset_is_on_going) {
-//		snprintf(buf, SEC_CMD_BUF_SIZE, "Reset is ongoing");
 		input_err(true, &info->client->dev, "%s: Reset is ongoing\n", __func__);
 		return -EPERM;
 	}
 
 	if (info->sec.cmd_is_running) {
-//		snprintf(buf, SEC_CMD_BUF_SIZE, "cmd is running");
 		input_err(true, &info->client->dev, "%s: cmd is running\n", __func__);
 		return -EPERM;
 	}
 
 	if (mutex_is_locked(&info->eventlock)) {
-//		snprintf(buf, SEC_CMD_BUF_SIZE, "irq is running");
 		input_err(true, &info->client->dev, "%s: irq is running\n", __func__);
 		return -EPERM;
 	}
@@ -1040,9 +1037,8 @@ static int get_selftest_fail_hist_dump(struct fts_ts_info *info, char *buf, u8 p
 	// Set Test mode : prepare save test data & fail history
 	regAdd[0] = 0xE4;
 	regAdd[1] = 0x02;
-	info->fts_write_reg(info, &regAdd[0], 2); // Set power mode = Test mode
 
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: set test mode failed, ret = %d\n", __func__, ret);
@@ -1057,8 +1053,8 @@ static int get_selftest_fail_hist_dump(struct fts_ts_info *info, char *buf, u8 p
 	// set factory level for read data
 	regAdd[0] = 0x74;
 	regAdd[1] = position;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: set factory level[%d] failed, ret = %d\n",
@@ -1069,8 +1065,8 @@ static int get_selftest_fail_hist_dump(struct fts_ts_info *info, char *buf, u8 p
 	// set data type for read data
 	regAdd[0] = 0x7D;
 	regAdd[1] = 0x03;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev, "%s: set data type failed, ret = %d\n", __func__, ret);
 		goto err_read;
@@ -1170,20 +1166,26 @@ static int get_selftest_fail_hist_dump(struct fts_ts_info *info, char *buf, u8 p
 	// clear factory level
 	regAdd[0] = 0x74;
 	regAdd[1] = 0;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_read;
 
 	// clear data type
 	regAdd[0] = 0x7D;
 	regAdd[1] = 0x00;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_read;
 	
 	// Set Normal mode : save test data & fail history
 	regAdd[0] = 0xE4;
 	regAdd[1] = 0x00;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_read;
 
 	/* reinit */
 	info->fts_systemreset(info, 0);
@@ -1199,21 +1201,28 @@ err_read:
 	// clear factory level
 	regAdd[0] = 0x74;
 	regAdd[1] = 0;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_out;
 
 	// clear data type
 	regAdd[0] = 0x7D;
 	regAdd[1] = 0x00;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_out;
 	
 	// Set Normal mode : save test data & fail history
 	regAdd[0] = 0xE4;
 	regAdd[1] = 0x00;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
 
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_out;
+
+err_out:
 	/* reinit */
 	info->fts_systemreset(info, 0);
 
@@ -1283,26 +1292,22 @@ static int fts_get_cmoffset_dump(struct fts_ts_info *info, char *buf, u8 positio
 
 	if (info->fts_power_state == FTS_POWER_STATE_POWERDOWN) {
 		input_err(true, &info->client->dev, "%s: [ERROR] Touch is stopped\n", __func__);
-//		snprintf(buf, info->proc_size, "TSP turned off");
 		return -EPERM;
 	}
 
 	if (info->fts_power_state == FTS_POWER_STATE_LOWPOWER) {
 		input_err(true, &info->client->dev, "%s: [ERROR] Touch is LP mode\n", __func__);
-//		snprintf(buf, info->proc_size, "TSP is LP mode");
 		return -EPERM;
 	}
 
 	if (info->reset_is_on_going) {
 		input_err(true, &info->client->dev, "%s: Reset is ongoing!\n", __func__);
-//		snprintf(buf, info->proc_size, "Reset is ongoing");
 		return -EPERM;
 	}
 
 	rbuff = kzalloc(size, GFP_KERNEL);
 	if (!rbuff) {
 		input_err(true, &info->client->dev, "%s: alloc failed\n", __func__);
-//		snprintf(buf, info->proc_size, "NG, mem alloc failed");
 		return -ENOMEM;
 	}
 
@@ -1316,8 +1321,12 @@ static int fts_get_cmoffset_dump(struct fts_ts_info *info, char *buf, u8 positio
 		// Set Test mode : prepare save test data & fail history
 		regAdd[0] = 0xE4;
 		regAdd[1] = 0x02;
-		info->fts_write_reg(info, &regAdd[0], 2); // Set power mode = Test mode
-		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+		if (ret < 0) {
+			snprintf(buf, info->proc_cmoffset_size, "NG, timeout, %d", ret);
+			goto out;
+		}
 		fts_interrupt_set(info, INT_ENABLE);
 
 		info->fts_command(info, FTS_CMD_CLEAR_ALL_EVENT, true);
@@ -1329,15 +1338,8 @@ static int fts_get_cmoffset_dump(struct fts_ts_info *info, char *buf, u8 positio
 		// set factory level for read data
 		regAdd[0] = 0x74;
 		regAdd[1] = position;
-		ret = info->fts_write_reg(info, &regAdd[0], 2);
-		if (ret < 0) {
-			input_err(true, &info->client->dev,
-					"%s: failed to request flash data ret: %d\n", __func__, ret);
-			snprintf(buf, info->proc_cmoffset_size, "NG, failed to request flash data, %d", ret);
-			goto out;
-		}
 
-		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
 		if (ret < 0) {
 			snprintf(buf, info->proc_cmoffset_size, "NG, timeout, %d", ret);
 			goto out;
@@ -1352,8 +1354,12 @@ static int fts_get_cmoffset_dump(struct fts_ts_info *info, char *buf, u8 positio
 			signature_val = FTS_CM3_SIGNATURE;
 			regAdd[1] = 0x02;
 		}
-		info->fts_write_reg(info, &regAdd[0], 2);
-		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+		if (ret < 0) {
+			snprintf(buf, info->proc_cmoffset_size, "NG, timeout, %d", ret);
+			goto out;
+		}
 
 		memset(rbuff, 0x00, size);
 
@@ -1417,21 +1423,28 @@ out:
 	// clear factory level
 	regAdd[0] = 0x74;
 	regAdd[1] = 0;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_out;
 
 	// clear data type
 	regAdd[0] = 0x7D;
 	regAdd[1] = 0x00;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_out;
 	
 	// Set Normal mode : save test data & fail history
 	regAdd[0] = 0xE4;
 	regAdd[1] = 0x00;
-	info->fts_write_reg(info, &regAdd[0], 2);
-	fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
 
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+	if (ret < 0)
+		goto err_out;
+
+err_out:
 	/* reinit */
 	info->fts_systemreset(info, 0);
 
@@ -1460,6 +1473,8 @@ static void enter_factory_mode(struct fts_ts_info *info, bool fac_mode)
 	}
 
 	fts_set_scanmode(info, info->scan_mode);
+
+	fts_delay(50);
 }
 
 static int fts_check_index(struct fts_ts_info *info)
@@ -1944,13 +1959,8 @@ void fts_get_sec_ito_test_result(struct fts_ts_info *info)
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x06;
 	regAdd[2] = 0x94;
-	ret = info->fts_write_reg(info, regAdd, 3);
-	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: failed to write request cmd, %d\n", __func__, ret);
-		goto done;
-	}
 
-	ret = fts_fw_wait_for_echo_event(info, regAdd, 3);
+	ret = fts_fw_wait_for_echo_event(info, regAdd, 3, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev, "%s: failed to get echo, %d\n", __func__, ret);
 		goto done;
@@ -2054,14 +2064,8 @@ int fts_set_sec_ito_test_result(struct fts_ts_info *info)
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x05;
 	regAdd[2] = 0x04;
-	ret = info->fts_write_reg(info, regAdd, 3);
-	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: failed to write panel cfg area, %d\n", __func__, ret);
-		goto out;
-	}
 
-	fts_delay(200);
-	ret = fts_fw_wait_for_echo_event(info, regAdd, 3);
+	ret = fts_fw_wait_for_echo_event(info, regAdd, 3, 200);
 	if (ret < 0) {
 		input_err(true, &info->client->dev, "%s: failed to get echo, %d\n", __func__, ret);
 		goto out;
@@ -2080,12 +2084,21 @@ out:
 	return ret;
 }
 
-int fts_fw_wait_for_jitter_result(struct fts_ts_info *info, int testmode, s16 *ret1, s16 *ret2)
+int fts_fw_wait_for_jitter_result(struct fts_ts_info *info, u8 *reg, u8 count, s16 *ret1, s16 *ret2)
 {
 	int rc = 0;
 	u8 regAdd;
 	u8 data[FTS_EVENT_SIZE];
 	int retry = 0;
+
+	mutex_lock(&info->wait_for);
+
+	rc = info->fts_write_reg(info, reg, count);
+	if (rc < 0) {
+		input_err(true, &info->client->dev, "%s: failed to write command\n", __func__);
+		mutex_unlock(&info->wait_for);
+		return rc;
+	}
 
 	memset(data, 0x0, FTS_EVENT_SIZE);
 
@@ -2134,9 +2147,7 @@ int fts_fw_wait_for_jitter_result(struct fts_ts_info *info, int testmode, s16 *r
 		fts_delay(20);
 	}
 
-	input_info(true, &info->client->dev, "%s: test mode %d done\n",
-					__func__, testmode);
-
+	mutex_unlock(&info->wait_for);
 	return rc;
 }
 
@@ -2173,9 +2184,7 @@ static void run_mutual_jitter(void *device_data)
 	regAdd[2] = 0x64;	//100 frame
 	regAdd[3] = 0x00;
 
-	info->fts_write_reg(info, &regAdd[0], 4);
-
-	ret = fts_fw_wait_for_jitter_result(info, FTS_EVENT_JITTER_MUTUAL_TEST, &mutual_min, &mutual_max);
+	ret = fts_fw_wait_for_jitter_result(info, regAdd, 4, &mutual_min, &mutual_max);
 	if (ret < 0) {
 		input_info(true, &info->client->dev, "%s: failed to read Mutual jitter\n", __func__);
 		goto ERROR;
@@ -2249,10 +2258,8 @@ static void run_self_jitter(void *device_data)
 	regAdd[1] = 0x0A;
 	regAdd[2] = 0x64;	/* 100 frame */
 	regAdd[3] = 0x00;
-
-	info->fts_write_reg(info, &regAdd[0], 4);
 	
-	ret = fts_fw_wait_for_jitter_result(info, FTS_EVENT_JITTER_SELF_TEST, &tx_p2p, &rx_p2p);
+	ret = fts_fw_wait_for_jitter_result(info, regAdd, 4, &tx_p2p, &rx_p2p);
 	if (ret < 0) {
 		input_info(true, &info->client->dev, "%s: failed to read Self jitter\n", __func__);
 		goto ERROR;
@@ -2551,8 +2558,7 @@ int fts_panel_micro_short_test(struct fts_ts_info *info, int type, short *min, s
 	regAdd[2] = 0x00;
 	regAdd[3] = 0xC0;
 
-	info->fts_write_reg(info, &regAdd[0], 4);
-	ret = fts_fw_wait_for_echo_event(info, regAdd, 4);
+	ret = fts_fw_wait_for_echo_event(info, regAdd, 4, 0);
 	if (ret < 0) {
 		input_info(true, &info->client->dev, "%s: command timeout\n",
 		__func__);
@@ -3289,14 +3295,8 @@ static void run_lp_single_ended_rawcap_read(void *device_data)
 	fts_interrupt_set(info, INT_DISABLE);
 
 	/* Request to Prepare single ended raw data from flash */
-	ret = info->fts_write_reg(info, regaddr, 4);
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to request flash data ret: %d\n", __func__, ret);
-		goto out;
-	}
 
-	ret = fts_fw_wait_for_echo_event(info, regaddr, 4);
+	ret = fts_fw_wait_for_echo_event(info, regaddr, 4, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: timeout, ret: %d\n", __func__, ret);
@@ -3362,14 +3362,8 @@ static void run_lp_single_ended_rawcap_read_all(void *device_data)
 	fts_interrupt_set(info, INT_DISABLE);
 
 	/* Request to Prepare single ended raw data from flash */
-	ret = info->fts_write_reg(info, regaddr, 4);
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to request flash data ret: %d\n", __func__, ret);
-		goto out;
-	}
 
-	ret = fts_fw_wait_for_echo_event(info, regaddr, 4);
+	ret = fts_fw_wait_for_echo_event(info, regaddr, 4, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: timeout, ret: %d\n", __func__, ret);
@@ -3422,15 +3416,8 @@ static void run_low_frequency_rawcap_read(void *device_data)
 	fts_interrupt_set(info, INT_DISABLE);
 
 	/* Request to Prepare Hight Frequency(ITO) raw data from flash */
-	ret = info->fts_write_reg(info, &regAdd[0], 4); // ITO test command
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to request flash data ret: %d\n", __func__, ret);
-		goto out;
-	}
-	fts_delay(30);
 
-	ret = fts_fw_wait_for_echo_event(info, regAdd, 4);
+	ret = fts_fw_wait_for_echo_event(info, regAdd, 4, 30);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: timeout, ret: %d\n", __func__, ret);
@@ -3484,15 +3471,8 @@ static void run_low_frequency_rawcap_read_all(void *device_data)
 	fts_interrupt_set(info, INT_DISABLE);
 
 	/* Request to Prepare Hight Frequency(ITO) raw data from flash */
-	ret = info->fts_write_reg(info, &regAdd[0], 4); // ITO test command
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to request flash data ret: %d\n", __func__, ret);
-		goto out;
-	}
-	fts_delay(30);
 
-	ret = fts_fw_wait_for_echo_event(info, regAdd, 4);
+	ret = fts_fw_wait_for_echo_event(info, regAdd, 4, 30);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: timeout, ret: %d\n", __func__, ret);
@@ -3541,15 +3521,8 @@ static void run_high_frequency_rawcap_read(void *device_data)
 	fts_interrupt_set(info, INT_DISABLE);
 
 	/* Request to Prepare Hight Frequency(ITO) raw data from flash */
-	ret = info->fts_write_reg(info, &regAdd[0], 4); // ITO test command
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to request flash data ret: %d\n", __func__, ret);
-		goto out;
-	}
-	fts_delay(100);
 
-	ret = fts_fw_wait_for_echo_event(info, regAdd, 4);
+	ret = fts_fw_wait_for_echo_event(info, regAdd, 4, 100);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: timeout, ret: %d\n", __func__, ret);
@@ -3612,15 +3585,8 @@ static void run_high_frequency_rawcap_read_all(void *device_data)
 	fts_interrupt_set(info, INT_DISABLE);
 
 	/* Request to Prepare Hight Frequency(ITO) raw data from flash */
-	ret = info->fts_write_reg(info, &regAdd[0], 4); // ITO test command
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to request flash data ret: %d\n", __func__, ret);
-		goto out;
-	}
-	fts_delay(100);
 
-	ret = fts_fw_wait_for_echo_event(info, regAdd, 4);
+	ret = fts_fw_wait_for_echo_event(info, regAdd, 4, 100);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: timeout, ret: %d\n", __func__, ret);
@@ -3893,8 +3859,8 @@ static void fts_read_ix_data(struct fts_ts_info *info, bool allnode)
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x06;
 	regAdd[2] = dataID; // SS - CX total
-	info->fts_write_reg(info, &regAdd[0], 3);
-	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+
+	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 0);
 	if (rc < 0) {
 		snprintf(buff, sizeof(buff), "NG");
 		sec->cmd_state = SEC_CMD_STATUS_FAIL;
@@ -4557,25 +4523,32 @@ static int fts_panel_test_micro_result(struct fts_ts_info *info, int type)
 {
 	struct sec_cmd_data *sec = &info->sec;
 	char buff[SEC_CMD_STR_LEN];
-	char data[8];
+	char data[FTS_EVENT_SIZE];
 	char echo;
 	int ret;
 	int retry = 30;
+	char save_cmd[12];
 
 	sec_cmd_set_default_result(sec);
 
 	memset(data, 0x00, sizeof(data));
+	memset(save_cmd, 0x00, sizeof(save_cmd));
 
+	save_cmd[0] = 0x76;
 	if (type == MICRO_OPEN_TEST) {
 		data[0] = 0xA4;
 		data[1] = 0x04;
 		data[2] = 0xFF;
 		data[3] = 0x01;
+
+		save_cmd[1] = 0x00;	/* OPEN */
 	} else if (type == MICRO_SHORT_TEST) {
 		data[0] = 0xA4;
 		data[1] = 0x04;
 		data[2] = 0x00;
 		data[3] = 0xC0;
+
+		save_cmd[1] = 0x01;	/* SHORT */
 	}
 
 	ret = info->fts_write_reg(info, data, 4);
@@ -4588,7 +4561,7 @@ static int fts_panel_test_micro_result(struct fts_ts_info *info, int type)
 	while (retry-- >= 0) {
 		memset(data, 0x00, sizeof(data));
 		echo = FTS_READ_ONE_EVENT;
-		ret = info->fts_read_reg(info, &echo, 1, data, 8);
+		ret = info->fts_read_reg(info, &echo, 1, data, FTS_EVENT_SIZE);
 		if (ret < 0) {
 			input_err(true, &info->client->dev, "%s: read failed: %d\n", __func__, ret);
 			goto error;
@@ -4600,20 +4573,41 @@ static int fts_panel_test_micro_result(struct fts_ts_info *info, int type)
 		msleep(20);
 
 		if (data[0] == 0x03) {
+			save_cmd[2] = 0x00;	/* PASS */
 			snprintf(buff, sizeof(buff), "OK");
 			ret = 0;
 			break;
 		} else if (data[0] == 0xF3) {
+			save_cmd[2] = 0x01;	/* FAIL */
 			snprintf(buff, sizeof(buff), "NG");
 			ret = 1;
-			break;
+			if (data[1] == 0x6B) {
+				/* 6B : TX */
+				save_cmd[3] = data[2];
+				save_cmd[4] = data[3];
+				save_cmd[5] = 0x00;
+				save_cmd[6] = 0x00;
+			} else if (data[1] == 0x6C) {
+				/* 6C : RX */
+				save_cmd[7] = data[2];
+				save_cmd[8] = data[3];
+				save_cmd[9] = data[4];
+				save_cmd[10] = data[5];
+				save_cmd[11] = data[6];
+			}
+
+			if (data[7] == 1)
+				break;
 		}
 
 		if (retry == 0)
 			goto error;
 	}
 
-
+	if (fts_fw_wait_for_echo_event(info, &save_cmd[0], 12, 0) < 0) {
+		input_err(true, &info->client->dev, "%s: save result failed: %d\n", __func__, ret);
+		goto error;
+	}
 
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 	sec->cmd_state = SEC_CMD_STATUS_OK;
@@ -4688,8 +4682,8 @@ static void run_trx_short_test(void *device_data)
 		// Set Test mode : prepare save test data & fail history
 		regAdd[0] = 0xE4;
 		regAdd[1] = 0x02;
-		info->fts_write_reg(info, &regAdd[0], 2); // Set power mode = Test mode
-		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+		// Set power mode = Test mode
+		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
 		fts_interrupt_set(info, INT_ENABLE);
 		if (ret < 0) {
 			input_err(true, &info->client->dev,
@@ -4706,8 +4700,8 @@ static void run_trx_short_test(void *device_data)
 		// set factory for save data & fail history
 		regAdd[0] = 0x74;
 		regAdd[1] = info->factory_position + 1;	/* sub #2 : 1 + 1, main #3 : 2 + 1 */
-		info->fts_write_reg(info, &regAdd[0], 2);
-		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
 		if (ret < 0) {
 			input_err(true, &info->client->dev,
 					"%s: fail set factory position[%d], ret=%d\n", __func__, regAdd[1], ret);
@@ -4726,8 +4720,13 @@ static void run_trx_short_test(void *device_data)
 		// Set Normal mode : save test data & fail history
 		regAdd[0] = 0xE4;
 		regAdd[1] = 0x00;
-		info->fts_write_reg(info, &regAdd[0], 2);
-		fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+
+		ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
+		if (ret < 0) {
+			input_err(true, &info->client->dev,
+					"%s: fail set normal mode\n", __func__);
+			goto test_fail;
+		}
 	}
 
 	/* reinit */
@@ -4829,20 +4828,19 @@ static void get_cx_data(void *device_data)
 
 }
 
+#define NORMAL_CX2	0	/* single driving */
+#define ACTIVE_CX2	1	/* multi driving */
 
-static int read_ms_cx_data(struct fts_ts_info *info, u8 *cx_min, u8 *cx_max)
+static int read_ms_cx_data(struct fts_ts_info *info, u8 active, s8 *cx_min, s8 *cx_max)
 {
-	u8 rdata[info->ForceChannelLength * info->SenseChannelLength];
+	s8 *rdata = NULL;
+	u8 cdata[FTS_COMP_DATA_HEADER_SIZE];
 	u8 regAdd[FTS_EVENT_SIZE] = { 0 };
 	u8 dataID;
 	u16 comp_start_addr;
 	int txnum, rxnum, i, j, ret = 0;
 	u8 *pStr = NULL;
 	u8 pTmp[16] = { 0 };
-
-	pStr = kzalloc(7 * (info->SenseChannelLength + 1), GFP_KERNEL);
-	if (pStr == NULL)
-		return -ENOMEM;
 
 	info->fts_command(info, FTS_CMD_CLEAR_ALL_EVENT, true); // Clear FIFO
 	fts_release_all_finger(info);
@@ -4852,73 +4850,125 @@ static int read_ms_cx_data(struct fts_ts_info *info, u8 *cx_min, u8 *cx_max)
 	fts_delay(20);
 
 	// Request compensation data type
-	dataID = 0x11;  // MS - LP
+	if (active == NORMAL_CX2)
+		dataID = 0x11;  // MS - LP
+	else if (active == ACTIVE_CX2)
+		dataID = 0x10;	// MS - ACTIVE
+
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x06;
 	regAdd[2] = dataID;
-	info->fts_write_reg(info, &regAdd[0], 3);
-	fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 0);
+	if (ret < 0) {
+		fts_interrupt_set(info, INT_ENABLE);
+		return ret;
+	}
 
 	// Read Header
 	regAdd[0] = 0xA6;
 	regAdd[1] = 0x00;
 	regAdd[2] = 0x00;
-	info->fts_read_reg(info, &regAdd[0], 3, &rdata[0], FTS_COMP_DATA_HEADER_SIZE);
+	ret = info->fts_read_reg(info, &regAdd[0], 3, &cdata[0], FTS_COMP_DATA_HEADER_SIZE);
+	if (ret < 0) {
+		fts_interrupt_set(info, INT_ENABLE);
+		return ret;
+	}
 	fts_interrupt_set(info, INT_ENABLE);
 
-	if ((rdata[0] != 0xA5) && (rdata[1] != dataID)) {
+	if ((cdata[0] != 0xA5) && (cdata[1] != dataID)) {
 		input_info(true, &info->client->dev, "%s: failed to read signature data of header.\n", __func__);
 		ret = -EIO;
-		goto out;
+		return ret;
 	}
 
-	txnum = rdata[4];
-	rxnum = rdata[5];
+	txnum = cdata[4];
+	rxnum = cdata[5];
+
+	rdata = kzalloc(txnum * rxnum, GFP_KERNEL);
+	if (!rdata)
+		return -ENOMEM;
 
 	comp_start_addr = (u16)FTS_COMP_DATA_HEADER_SIZE;
 	regAdd[0] = 0xA6;
 	regAdd[1] = (u8)(comp_start_addr >> 8);
 	regAdd[2] = (u8)(comp_start_addr & 0xFF);
-	info->fts_read_reg(info, &regAdd[0], 3, &rdata[0], txnum * rxnum);
+	ret = info->fts_read_reg(info, &regAdd[0], 3, &rdata[0], txnum * rxnum);
+	if (ret < 0)
+		goto out;
+
+	pStr = kzalloc(7 * (rxnum + 1), GFP_KERNEL);
+	if (!pStr) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	*cx_min = *cx_max = rdata[0];
-	for (i = 0; i < info->ForceChannelLength; i++) {
-		memset(pStr, 0x0, 7 * (info->SenseChannelLength + 1));
+	for (i = 0; i < txnum; i++) {
+		memset(pStr, 0x0, 7 * (rxnum + 1));
 		snprintf(pTmp, sizeof(pTmp), "Tx%02d | ", i);
-		strlcat(pStr, pTmp, 7 * (info->SenseChannelLength + 1));
+		strlcat(pStr, pTmp, 7 * (rxnum + 1));
 
-		for (j = 0; j < info->SenseChannelLength; j++) {
-			snprintf(pTmp, sizeof(pTmp), "%3d", rdata[i * info->SenseChannelLength + j]);
-			strlcat(pStr, pTmp, 7 * (info->SenseChannelLength + 1));
+		for (j = 0; j < rxnum; j++) {
+			snprintf(pTmp, sizeof(pTmp), "%4d", rdata[i * rxnum + j]);
+			strlcat(pStr, pTmp, 7 * (rxnum + 1));
 
-			if (fts_all_node_map[i * info->SenseChannelLength + j]){
-				*cx_min = min(*cx_min, rdata[i * info->SenseChannelLength + j]);
-				*cx_max = max(*cx_max, rdata[i * info->SenseChannelLength + j]);
-			} else {
-				input_dbg(true, &info->client->dev, "%s : trench(%d/%d) : %d\n",
-					__func__, i, j, rdata[i * info->SenseChannelLength + j]);
-			}
-#if 0
-			/* Only for F900 */
-			if (j > 17 && i > 37 && strncmp(info->board->model_name, "F900", 4) == 0) {
-				input_dbg(true, &info->client->dev, "%s : trench(%d/%d) : %d\n",
-					__func__, j, i, info->pFrame[(i * info->SenseChannelLength) + j]);
-			} else {
-				*cx_min = min(*cx_min, rdata[j * info->SenseChannelLength + i]);
-				*cx_max = max(*cx_max, rdata[j * info->SenseChannelLength + i]);
-			}
-#endif
+			*cx_min = min(*cx_min, rdata[i * rxnum + j]);
+			*cx_max = max(*cx_max, rdata[i * rxnum + j]);
 		}
 		input_raw_info_d(true, &info->client->dev, "%s\n", pStr);
 	}
 	input_raw_info_d(true, &info->client->dev, "cx min:%d, cx max:%d\n", *cx_min, *cx_max);
 
-	if (info->cx_data)
+	/* info->cx_data length: Force * Sense */
+	if (info->cx_data && active == NORMAL_CX2)
 		memcpy(&info->cx_data[0], &rdata[0], info->ForceChannelLength * info->SenseChannelLength);
 
-out:
 	kfree(pStr);
+out:
+	kfree(rdata);
 	return ret;
+}
+
+static void run_active_cx_data_read(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
+	char buff[SEC_CMD_STR_LEN] = { 0 };
+	char buff_minmax[SEC_CMD_STR_LEN] = { 0 };
+	int rc;
+	s8 cx_min, cx_max;
+
+	sec_cmd_set_default_result(sec);
+
+	if (info->fts_power_state == FTS_POWER_STATE_POWERDOWN) {
+		input_err(true, &info->client->dev, "%s: [ERROR] Touch is stopped\n",
+				__func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		if (sec->cmd_all_factory_state == SEC_CMD_STATUS_RUNNING)
+			sec_cmd_set_cmd_result_all(sec, buff, strnlen(buff, sizeof(buff)), "ACTIVE_CX2_DATA");
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
+	input_raw_info_d(true, &info->client->dev, "%s: start\n", __func__);
+
+	rc = read_ms_cx_data(info, ACTIVE_CX2, &cx_min, &cx_max);
+	if (rc < 0) {
+		snprintf(buff, sizeof(buff), "NG");
+		snprintf(buff_minmax, sizeof(buff_minmax), "NG");
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+	} else {
+		snprintf(buff_minmax, sizeof(buff_minmax), "%d,%d", cx_min, cx_max);
+		snprintf(buff, sizeof(buff), "OK");
+		sec->cmd_state = SEC_CMD_STATUS_OK;
+	}
+
+	if (sec->cmd_all_factory_state == SEC_CMD_STATUS_RUNNING)
+		sec_cmd_set_cmd_result_all(sec, buff_minmax, strnlen(buff_minmax, sizeof(buff_minmax)), "ACTIVE_CX2_DATA");
+	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
 }
 
 static void run_cx_data_read(void *device_data)
@@ -4928,7 +4978,7 @@ static void run_cx_data_read(void *device_data)
 	char buff[SEC_CMD_STR_LEN] = { 0 };
 	char buff_minmax[SEC_CMD_STR_LEN] = { 0 };
 	int rc;
-	u8 cx_min, cx_max;
+	s8 cx_min, cx_max;
 
 	sec_cmd_set_default_result(sec);
 
@@ -4945,7 +4995,7 @@ static void run_cx_data_read(void *device_data)
 
 	input_raw_info_d(true, &info->client->dev, "%s: start\n", __func__);
 
-	rc = read_ms_cx_data(info, &cx_min, &cx_max);
+	rc = read_ms_cx_data(info, NORMAL_CX2, &cx_min, &cx_max);
 	if (rc < 0) {
 		snprintf(buff, sizeof(buff), "NG");
 		snprintf(buff_minmax, sizeof(buff_minmax), "NG");
@@ -4968,7 +5018,7 @@ static void get_cx_all_data(void *device_data)
 	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
 	char buff[SEC_CMD_STR_LEN] = { 0 };
 	int rc, i, j;
-	u8 cx_min, cx_max;
+	s8 cx_min, cx_max;
 	char *all_strbuff;
 
 	sec_cmd_set_default_result(sec);
@@ -4987,7 +5037,7 @@ static void get_cx_all_data(void *device_data)
 	input_info(true, &info->client->dev, "%s: start\n", __func__);
 
 	enter_factory_mode(info, true);
-	rc = read_ms_cx_data(info, &cx_min, &cx_max);
+	rc = read_ms_cx_data(info, NORMAL_CX2, &cx_min, &cx_max);
 
 	/* do not systemreset in COB type */
 	if (info->board->chip_on_board)
@@ -5238,6 +5288,7 @@ static void factory_cmd_result_all(void *device_data)
 //	get_rawcap_gap_data(sec);		/* micro_open rawcap gap */
 //	run_low_frequency_rawcap_read(sec);	/* micro_short gap diff */
 
+	run_active_cx_data_read(sec);
 	run_cx_data_read(sec);
 	get_cx_gap_data(sec);
 	run_ix_data_read(sec);
@@ -5613,6 +5664,74 @@ static void get_osc_trim_info(void *device_data)
 	input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
 }
 
+static void run_elvss_test(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
+	char buff[SEC_CMD_STR_LEN] = { 0 };
+	int ret;
+	u8 data[FTS_EVENT_SIZE + 1];
+	int retry = 10;
+
+
+	sec_cmd_set_default_result(sec);
+	snprintf(buff, sizeof(buff), "NG");
+
+	if (info->fts_power_state == FTS_POWER_STATE_POWERDOWN) {
+		input_err(true, &info->client->dev, "%s: [ERROR] Touch is stopped\n",
+				__func__);
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
+	fts_interrupt_set(info, INT_DISABLE);
+
+	memset(data, 0x00, 8);
+
+	data[0] = 0xA4;
+	data[1] = 0x04;
+	data[2] = 0x00;
+	data[3] = 0x04;
+
+	ret = info->fts_write_reg(info, data, 4);
+	if (ret < 0) {
+		input_err(true, &info->client->dev,
+				"%s: write failed. ret: %d\n", __func__, ret);
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		fts_interrupt_set(info, INT_ENABLE);
+		return;
+	}
+
+	memset(data, 0x00, FTS_EVENT_SIZE);
+	data[0] = FTS_READ_ONE_EVENT;
+	while (info->fts_read_reg(info, &data[0], 1, &data[1], FTS_EVENT_SIZE) > 0) {
+		input_info(true, &info->client->dev,
+			"%s: %02X: %02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X\n",
+			__func__, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+			data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]);
+
+		if (data[1] == FTS_EVENT_ERROR_REPORT) {
+			break;
+		} else if (data[1] == 0x03) {
+			snprintf(buff, sizeof(buff), "OK");
+			break;
+		} else if (retry < 0) {
+			break;
+		}
+		retry--;
+		fts_delay(20);
+
+	}
+
+	fts_interrupt_set(info, INT_ENABLE);
+
+	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
+}
+
 int set_nvm_data_by_size(struct fts_ts_info *info, u8 offset, int length, u8 *buf)
 {
 	u8 regAdd[256] = { 0 };
@@ -5657,20 +5776,12 @@ int set_nvm_data_by_size(struct fts_ts_info *info, u8 offset, int length, u8 *bu
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x05;
 	regAdd[2] = 0x04; // panel configuration area
-	ret = info->fts_write_reg(info, &regAdd[0], 3);
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: save to flash failed. ret: %d\n", __func__, ret);
-		goto out;
-	}
 
-	fts_delay(200);
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 200);
 	if (ret < 0)
 		input_err(true, &info->client->dev,
 				"%s: failed to get echo. ret: %d\n", __func__, ret);
 
-out:
 	fts_interrupt_set(info, INT_ENABLE);
 
 	return ret;
@@ -5697,15 +5808,8 @@ int get_nvm_data_by_size(struct fts_ts_info *info, u8 offset, int length, u8 *nv
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x06;
 	regAdd[2] = 0x90;
-	ret = fts_write_reg(info, &regAdd[0], 3);
-	if (ret < 0) {
-		input_err(true, &info->client->dev,
-				"%s: write failed. ret: %d\n", __func__, ret);
-		fts_interrupt_set(info, INT_ENABLE);
-		return ret;
-	}
 
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev,
 				"%s: timeout. ret: %d\n", __func__, ret);
@@ -6364,9 +6468,6 @@ static void spay_enable(void *device_data)
 	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
 	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
 	char buff[SEC_CMD_STR_LEN] = { 0 };
-//#ifdef FTS_SUPPORT_SPONGELIB
-//	int ret = 0;
-//#endif
 
 	sec_cmd_set_default_result(sec);
 
@@ -6375,28 +6476,14 @@ static void spay_enable(void *device_data)
 	else
 		info->lowpower_flag &= ~FTS_MODE_SPAY;
 
+	mutex_lock(&info->device_mutex);
 	fts_chk_tsp_ic_status(info, FTS_STATE_CHK_POS_SYSFS);
-
-// below codes remove?
-#if 0//def FTS_SUPPORT_SPONGELIB
-	ret = info->fts_write_to_sponge(info, FTS_CMD_SPONGE_OFFSET_MODE,
-			&info->lowpower_flag, sizeof(info->lowpower_flag));
-	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: failed. ret: %d\n", __func__, ret);
-		snprintf(buff, sizeof(buff), "%s", "NG");
-		sec->cmd_state = SEC_CMD_STATUS_FAIL;
-
-		goto out;
-	}
-#endif
+	mutex_unlock(&info->device_mutex);
 
 	snprintf(buff, sizeof(buff), "OK");
 	sec->cmd_state = SEC_CMD_STATUS_OK;
-
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 
-//out:
-	sec->cmd_state = SEC_CMD_STATUS_WAITING;
 	sec_cmd_set_cmd_exit(sec);
 
 	input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
@@ -6406,9 +6493,6 @@ static void aot_enable(void *device_data)
 {
 	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
 	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
-//#ifdef FTS_SUPPORT_SPONGELIB
-//	int ret = 0;
-//#endif
 	char buff[SEC_CMD_STR_LEN] = { 0 };
 
 	sec_cmd_set_default_result(sec);
@@ -6418,21 +6502,10 @@ static void aot_enable(void *device_data)
 	else
 		info->lowpower_flag &= ~FTS_MODE_DOUBLETAP_WAKEUP;
 
+	mutex_lock(&info->device_mutex);
 	fts_chk_tsp_ic_status(info, FTS_STATE_CHK_POS_SYSFS);
+	mutex_unlock(&info->device_mutex);
 
-// below codes remove?
-#if 0 //def FTS_SUPPORT_SPONGELIB
-	ret = info->fts_write_to_sponge(info, FTS_CMD_SPONGE_OFFSET_MODE,
-			&info->lowpower_flag, sizeof(info->lowpower_flag));
-	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: failed. ret: %d\n", __func__, ret);
-		snprintf(buff, sizeof(buff), "%s", "NG");
-		sec->cmd_state = SEC_CMD_STATUS_FAIL;
-		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
-		sec_cmd_set_cmd_exit(sec);
-		return;
-	}
-#endif
 	snprintf(buff, sizeof(buff), "OK");
 	sec->cmd_state = SEC_CMD_STATUS_OK;
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -6444,9 +6517,6 @@ static void aod_enable(void *device_data)
 {
 	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
 	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
-//#ifdef FTS_SUPPORT_SPONGELIB
-//	int ret = 0;
-//#endif
 	char buff[SEC_CMD_STR_LEN] = { 0 };
 
 	sec_cmd_set_default_result(sec);
@@ -6456,21 +6526,10 @@ static void aod_enable(void *device_data)
 	else
 		info->lowpower_flag &= ~FTS_MODE_AOD;
 
+	mutex_lock(&info->device_mutex);
 	fts_chk_tsp_ic_status(info, FTS_STATE_CHK_POS_SYSFS);
+	mutex_unlock(&info->device_mutex);
 
-	// below codes remove?
-#if 0 //def FTS_SUPPORT_SPONGELIB
-	ret = info->fts_write_to_sponge(info, FTS_CMD_SPONGE_OFFSET_MODE,
-			&info->lowpower_flag, sizeof(info->lowpower_flag));
-	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: failed. ret: %d\n", __func__, ret);
-		snprintf(buff, sizeof(buff), "%s", "NG");
-		sec->cmd_state = SEC_CMD_STATUS_FAIL;
-		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
-		sec_cmd_set_cmd_exit(sec);
-		return;
-	}
-#endif
 	snprintf(buff, sizeof(buff), "OK");
 	sec->cmd_state = SEC_CMD_STATUS_OK;
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -6491,26 +6550,12 @@ static void singletap_enable(void *device_data)
 	else
 		info->lowpower_flag &= ~FTS_MODE_SINGLETAP;
 
+	mutex_lock(&info->device_mutex);
 	fts_chk_tsp_ic_status(info, FTS_STATE_CHK_POS_SYSFS);
-
-#ifdef FTS_SUPPORT_SPONGELIB
-	if (!info->use_sponge)
-		goto singletap_ng;
-
-	info->fts_write_to_sponge(info, FTS_CMD_SPONGE_OFFSET_MODE,
-			&info->lowpower_flag, sizeof(info->lowpower_flag));
-#endif
+	mutex_unlock(&info->device_mutex);
 
 	snprintf(buff, sizeof(buff), "OK");
 	sec->cmd_state = SEC_CMD_STATUS_OK;
-	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
-	sec_cmd_set_cmd_exit(sec);
-	input_info(true, &info->client->dev, "%s: %d\n", __func__, sec->cmd_param[0]);
-	return;
-
-singletap_ng:
-	snprintf(buff, sizeof(buff), "NG");
-	sec->cmd_state = SEC_CMD_STATUS_FAIL;
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 	sec_cmd_set_cmd_exit(sec);
 	input_info(true, &info->client->dev, "%s: %d\n", __func__, sec->cmd_param[0]);
@@ -6795,7 +6840,7 @@ static void set_touchable_area(void *device_data)
 	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
 	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
 	char buff[SEC_CMD_STR_LEN] = { 0 };
-	u8 regAdd[3] = {0xC1, 0x03, 0x00};
+	u8 regAdd[3] = {0xC1, 0x0F, 0x00};
 	int ret;
 
 	sec_cmd_set_default_result(sec);
@@ -7027,8 +7072,11 @@ static void set_rear_selfie_mode(void *device_data)
 		info->rear_selfie_mode = sec->cmd_param[0];
 		snprintf(buff, sizeof(buff), "OK");
 
-		if (info->rear_selfie_mode)
+		if (info->rear_selfie_mode) {
+			mutex_lock(&info->device_mutex);
 			fts_chk_tsp_ic_status(info, FTS_STATE_CHK_POS_SYSFS);
+			mutex_unlock(&info->device_mutex);
+		}
 	}
 
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -7059,8 +7107,38 @@ static void ear_detect_enable(void *device_data)
 		data[1] = info->ed_enable;
 
 		ret = fts_write_reg(info, data, 2);
-		input_info(true, &info->client->dev, "%s: set ear detect %s, ret = %d\n",
+		input_info(true, &info->client->dev, "%s: %s, ret = %d\n",
 				__func__, info->ed_enable ? "enable" : "disable", ret);
+	}
+
+	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+	sec->cmd_state = SEC_CMD_STATUS_WAITING;
+	sec_cmd_set_cmd_exit(sec);
+
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, buff);
+}
+
+static void set_sip_mode(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct fts_ts_info *info = container_of(sec, struct fts_ts_info, sec);
+	char buff[SEC_CMD_STR_LEN] = { 0 };
+	int ret;
+
+	sec_cmd_set_default_result(sec);
+
+	if (sec->cmd_param[0] < 0 || sec->cmd_param[0] > 1) {
+		snprintf(buff, sizeof(buff), "NG");
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+	} else {
+		ret = fts_set_sip_mode(info, (u8)sec->cmd_param[0]);
+		if (ret < 0) {
+			snprintf(buff, sizeof(buff), "NG");
+			sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		} else {
+			snprintf(buff, sizeof(buff), "OK");
+			sec->cmd_state = SEC_CMD_STATUS_OK;
+		}
 	}
 
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));

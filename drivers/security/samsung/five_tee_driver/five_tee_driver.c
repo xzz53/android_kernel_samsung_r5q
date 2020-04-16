@@ -23,6 +23,7 @@
 #include "tee_client_api.h"
 #include "five_ta_uuid.h"
 #include "five_audit.h"
+#include "teec_operation.h"
 
 #ifdef CONFIG_TEE_DRIVER_DEBUG
 #include <linux/uaccess.h>
@@ -140,11 +141,13 @@ static int send_cmd(unsigned int cmd,
 		size_t *signature_len)
 {
 	TEEC_Operation operation = {};
+	TEEC_SharedMemory shmem = {0};
 	TEEC_Result rc;
 	uint32_t origin;
 	struct tci_msg *msg = NULL;
 	size_t msg_len;
 	size_t sig_len;
+	const bool inout_direction = cmd == CMD_SIGN ? true : false;
 
 	if (!hash || !hash_len ||
 			!signature || !signature_len || !(*signature_len))
@@ -190,11 +193,22 @@ static int send_cmd(unsigned int cmd,
 		}
 	}
 
-	msg = kzalloc(msg_len, GFP_KERNEL);
-	if (!msg) {
+	shmem.buffer = NULL;
+	shmem.size = msg_len;
+	shmem.flags = TEEC_MEM_INPUT;
+	if (inout_direction)
+		shmem.flags |= TEEC_MEM_OUTPUT;
+
+	rc = TEEC_AllocateSharedMemory(context, &shmem);
+	if (rc != TEEC_SUCCESS || shmem.buffer == NULL) {
 		mutex_unlock(&itee_driver_lock);
-		return -ENOMEM;
+		five_audit_tee_msg("send_cmd",
+			"TEEC_AllocateSharedMemory is failed", rc, 0);
+		rc = -ENOMEM;
+		goto out;
 	}
+
+	msg = (struct tci_msg *)shmem.buffer;
 
 	msg->hash_algo = algo;
 	memcpy(msg->hash, hash, hash_len);
@@ -202,20 +216,10 @@ static int send_cmd(unsigned int cmd,
 	if (label_len)
 		memcpy(msg->label, label, label_len);
 
-	if (cmd == CMD_VERIFY) {
+	if (cmd == CMD_VERIFY)
 		memcpy(msg->signature, signature, sig_len);
 
-		operation.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INPUT,
-							TEEC_NONE,
-							TEEC_NONE, TEEC_NONE);
-	} else {
-		operation.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INOUT,
-							TEEC_NONE,
-							TEEC_NONE, TEEC_NONE);
-	}
-
-	operation.params[0].tmpref.buffer = msg;
-	operation.params[0].tmpref.size = msg_len;
+	FillOperationSharedMem(&shmem, &operation, inout_direction);
 
 	rc = TEEC_InvokeCommand(session, cmd, &operation, &origin);
 
@@ -237,8 +241,8 @@ static int send_cmd(unsigned int cmd,
 		*signature_len = sig_len;
 	}
 
+	TEEC_ReleaseSharedMemory(&shmem);
 out:
-	kzfree(msg);
 	return rc;
 }
 

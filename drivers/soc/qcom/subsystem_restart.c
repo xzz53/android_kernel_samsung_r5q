@@ -1101,8 +1101,13 @@ void subsystem_put(void *subsystem)
 	if (IS_ERR_OR_NULL(subsys))
 		return;
 
+	/* 
+	 * When pm_proxy_helper put modem, it also shuts down esoc0.
+	 * If this occurs after ril's first voting, then esoc cannot be 
+	 * powered on again unless ril restarts.
+	 */
 	subsys_d = find_subsys_device(subsys->desc->poff_depends_on);
-	if (subsys_d)
+	if (subsys_d && strncmp("pm_proxy_helper", current->comm, strlen("pm_proxy_helper")))
 		subsystem_put(subsys_d);
 
 	track = subsys_get_track(subsys);
@@ -1366,10 +1371,19 @@ int subsystem_restart_dev(struct subsys_device *dev)
 		subsys_set_modem_silent_ssr(false, ESOC_SSR);
 	}
 
+
+#ifdef CONFIG_SENSORS_SSC
+	if (!strcmp(name, "slpi")) {
 #if defined(CONFIG_SEC_FACTORY) && defined(CONFIG_SUPPORT_DUAL_6AXIS)
-	if (is_pretest() && !strcmp(name, "slpi")) {
-		pr_info("PreTest is running. slpi ssr!!\n");
-		dev->restart_level = RESET_SUBSYS_COUPLED;
+		if (is_pretest()) {	
+			pr_info("PreTest is running. slpi ssr!!\n");
+			dev->restart_level = RESET_SUBSYS_COUPLED;
+		}
+#endif
+		if (dev->desc->run_fssr) {
+			dev->restart_level = RESET_SUBSYS_COUPLED;
+			dev->desc->run_fssr = false;
+		}
 	}
 #endif
 	/*
@@ -1476,6 +1490,13 @@ int is_subsystem_online(const char *name)
 	return dev->count;
 }
 EXPORT_SYMBOL(is_subsystem_online);
+#endif
+
+#ifdef CONFIG_SENSORS_SSC
+void subsys_set_fssr(struct subsys_device *dev, bool value)
+{
+	dev->desc->run_fssr = value;
+}
 #endif
 
 void subsys_set_modem_silent_ssr(bool value, int id)

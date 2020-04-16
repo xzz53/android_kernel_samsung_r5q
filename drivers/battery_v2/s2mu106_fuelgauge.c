@@ -550,8 +550,9 @@ static int s2mu106_get_soc_map(struct s2mu106_fuelgauge_data *fuelgauge,
 		bool bat_charging, int comp_socr)
 {
 	int soc_map = 0;
+	int curr = s2mu106_get_current(fuelgauge);
 
-	if (bat_charging || fuelgauge->is_charging) {
+	if (bat_charging || (fuelgauge->is_charging && curr >= 30)) {
 		if (fuelgauge->soc0i >= 9950)
 			soc_map = 10000;
 		else
@@ -1280,6 +1281,9 @@ batcap_learn_init:
 				s2mu106_write_and_verify_reg_byte(fuelgauge->i2c, 0x29, temp);
 
 				low_voltage_limit_cnt = 0;
+#if (TEMP_COMPEN)
+				fuelgauge->flag_mapping = false;
+#endif
 			}
 		} else { 
 			low_voltage_limit_cnt = 0;

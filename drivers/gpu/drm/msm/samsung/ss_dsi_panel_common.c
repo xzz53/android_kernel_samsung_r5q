@@ -361,18 +361,26 @@ static void ss_send_esd_recovery_cmd(struct samsung_display_driver_data *vdd)
 static void ss_check_te(struct samsung_display_driver_data *vdd)
 {
 	unsigned int disp_te_gpio;
-	int rc, te_count = 0;
+	int rc, te_count, te_checked = 0;
 	int te_max = 20000; /*sampling 200ms */
+	s64 start_time_64, te_time_64;
+
+	preempt_disable();
 
 	disp_te_gpio = ss_get_te_gpio(vdd);
+	start_time_64 = ktime_to_us(ktime_get());
 
-	LCD_INFO("============ start waiting for TE ============\n");
+	LCD_INFO("============ start waiting for TE_%d ============\n", vdd->ndx);
 	if (gpio_is_valid(disp_te_gpio)) {
 		for (te_count = 0 ; te_count < te_max ; te_count++) {
 			rc = gpio_get_value(disp_te_gpio);
 			if (rc == 1) {
-				LCD_INFO("LDI generate TE within = %d.%dms\n", te_count/100, te_count%100);
-				break;
+				te_time_64 = ktime_to_us(ktime_get());
+				LCD_INFO("DDI generate TE within = %llu\n", te_time_64 - start_time_64);
+				start_time_64 = te_time_64;
+				udelay(1000);
+				te_count += 100;
+				te_checked = 1;
 			}
 			/* usleep suspends the calling thread whereas udelay is a
 			 * busy wait. Here the value of te_gpio is checked in a loop of
@@ -383,15 +391,18 @@ static void ss_check_te(struct samsung_display_driver_data *vdd)
 			 */
 			udelay(10);
 		}
-		if (te_count == te_max) {
+		if ((te_count == te_max) && !te_checked) {
 			LCD_ERR("LDI doesn't generate TE");
 			SS_XLOG(0xbad);
 			inc_dpui_u32_field(DPUI_KEY_QCT_NO_TE, 1);
 		}
 	} else
 		LCD_ERR("disp_te_gpio is not valid\n");
-	LCD_INFO("============ end waiting for TE ============\n");
+	LCD_INFO("============ end waiting for TE_%d ============\n", vdd->ndx);
+	
+	preempt_enable();
 }
+
 /* SAMSUNG_FINGERPRINT */
 static void ss_wait_for_te_gpio(struct samsung_display_driver_data *vdd, int num_of_te, int delay_after_te)
 {
@@ -1033,6 +1044,67 @@ error:
 
 	return -ENOMEM;
 }
+int ss_parse_multi_to_one_candella_mapping_table(struct device_node *np,
+		void *tbl, char *keystring)
+{
+	struct candela_map_table *table = (struct candela_map_table *) tbl;
+	const __be32 *data;
+	int len = 0, i = 0, data_offset = 0;
+	int col_size = 0;
+
+	data = of_get_property(np, keystring, &len);
+	if (!data) {
+		LCD_DEBUG("%d, Unable to read table %s ", __LINE__, keystring);
+		return -EINVAL;
+	} else
+		LCD_ERR("Success to read table %s\n", keystring);
+
+	col_size = 4;
+
+	if ((len % col_size) != 0) {
+		LCD_ERR("%d, Incorrect table entries for %s , len : %d",
+					__LINE__, keystring, len);
+		return -EINVAL;
+	}
+
+	table->tab_size = len / (sizeof(int) * col_size);
+
+	table->cd = kzalloc((sizeof(int) * table->tab_size), GFP_KERNEL);
+	if (!table->cd)
+		goto error;
+	table->idx = kzalloc((sizeof(int) * table->tab_size), GFP_KERNEL);
+	if (!table->idx)
+		goto error;
+	table->from = kzalloc((sizeof(int) * table->tab_size), GFP_KERNEL);
+	if (!table->from)
+		goto error;
+	table->end = kzalloc((sizeof(int) * table->tab_size), GFP_KERNEL);
+	if (!table->end)
+		goto error;
+
+	for (i = 0 ; i < table->tab_size; i++) {
+		table->idx[i] = be32_to_cpup(&data[data_offset++]); 	/* field => <idx> */
+		table->from[i] = be32_to_cpup(&data[data_offset++]);	/* field => <from> */
+		table->end[i] = be32_to_cpup(&data[data_offset++]); 	/* field => <end> */
+		table->cd[i] = be32_to_cpup(&data[data_offset++]);		/* field => <cd> */
+	}
+
+	table->min_lv = table->from[0];
+	table->max_lv = table->end[table->tab_size-1];
+
+	LCD_INFO("tab_size (%d), hbm min/max lv (%d/%d)\n", table->tab_size, table->min_lv, table->max_lv);
+
+	return 0;
+
+error:
+	kfree(table->cd);
+	kfree(table->idx);
+	kfree(table->from);
+	kfree(table->end);
+
+	return -ENOMEM;
+}
+
 
 int ss_parse_hbm_candella_mapping_table(struct device_node *np,
 		void *tbl, char *keystring)
@@ -3076,6 +3148,11 @@ static void ss_panel_parse_dt_bright_tables(struct device_node *np,
 				"samsung,gamma_mode2_candela_map_table_rev", panel_rev,
 				ss_parse_gamma_mode2_candella_mapping_table);
 
+		parse_dt_data(np, &dtsi_data->candela_map_table[MULTI_TO_ONE_NORMAL][panel_rev],
+				sizeof(struct candela_map_table),
+				"samsung,multi_to_one_candela_map_table_rev", panel_rev,
+				ss_parse_multi_to_one_candella_mapping_table);
+
 		/* ACL */
 		parse_dt_data(np, &dtsi_data->acl_map_table[panel_rev],
 				sizeof(struct cmd_map),
@@ -3119,7 +3196,8 @@ static void ss_panel_pbaboot_config(struct device_node *np,
 		struct samsung_display_driver_data *vdd)
 {
 	vdd->samsung_enable_splash_pba = of_property_read_bool(np, "samsung,enable_splash_pba");
-
+	
+	LCD_INFO("vdd->samsung_enable_splash_pba %d\n", vdd->samsung_enable_splash_pba);
 	// TODO: set appropriate value to drm display members... not pinfo...
 #if 0
 	struct ss_panel_info *pinfo = NULL;
@@ -3262,6 +3340,12 @@ static void ss_panel_parse_dt(struct samsung_display_driver_data *vdd)
 
 	LCD_INFO("OSC TE fitting %s\n",
 		vdd->dtsi_data.samsung_osc_te_fitting ? "enabled" : "disabled");
+
+	/* Set disp_en_gpio_use flag */
+	vdd->dtsi_data.disp_en_gpio_use = of_property_read_bool(np, "samsung,disp_en_gpio_use");
+	if (vdd->dtsi_data.disp_en_gpio_use)
+		vdd->dtsi_data.disp_en_gpio_use = true;
+	LCD_INFO("disp_en_gpio_use %s\n", vdd->dtsi_data.disp_en_gpio_use ? "enabled" : "disabled");
 
 	/* Set HMT flag */
 	vdd->dtsi_data.hmt_enabled = of_property_read_bool(np, "samsung,hmt_enabled");
@@ -3434,9 +3518,6 @@ static void ss_panel_parse_dt(struct samsung_display_driver_data *vdd)
 			vdd->poc_driver.read_addr_idx[0],
 			vdd->poc_driver.read_addr_idx[1],
 			vdd->poc_driver.read_addr_idx[2]);
-
-		/* parse spi cmds */
-		ss_panel_parse_spi_cmd(np, vdd);
 	}
 
 	/* PAC */
@@ -3446,6 +3527,9 @@ static void ss_panel_parse_dt(struct samsung_display_driver_data *vdd)
 	/* Gamma Mode 2 */
 	vdd->br.gamma_mode2_support = of_property_read_bool(np, "samsung,support_gamma_mode2");
 	LCD_INFO("vdd->br.gamma_mode2_support = %d\n", vdd->br.gamma_mode2_support);
+
+	vdd->br.multi_to_one_support = of_property_read_bool(np, "samsung,multi_to_one_support");
+	LCD_INFO("vdd->br.multi_to_one_support = %d\n", vdd->br.multi_to_one_support);
 
 	/* Global Para */
 	vdd->gpara = of_property_read_bool(np, "samsung,support_gpara");
@@ -3478,6 +3562,9 @@ static void ss_panel_parse_dt(struct samsung_display_driver_data *vdd)
 	/* DDI SPI */
 	vdd->samsung_support_ddi_spi = of_property_read_bool(np, "samsung,support_ddi_spi");
 	if (vdd->samsung_support_ddi_spi) {
+		/* parse spi cmds */
+		ss_panel_parse_spi_cmd(np, vdd);
+
 		rc = of_property_read_u32(np, "samsung,ddi_spi_cs_high_gpio_for_gpara", tmp);
 		vdd->ddi_spi_cs_high_gpio_for_gpara = (!rc ? tmp[0] : -1);
 
@@ -3568,6 +3655,10 @@ static void ss_panel_parse_dt(struct samsung_display_driver_data *vdd)
 	vdd->dtsi_data.samsung_wait_after_reset_delay = (!rc ? tmp[0] : 0);
 	rc = of_property_read_u32(np, "samsung,wait_after_sleep_out_delay", tmp);
 	vdd->dtsi_data.samsung_wait_after_sleep_out_delay = (!rc ? tmp[0] : 0);
+
+	rc = of_property_read_u32(np, "samsung,num_of_data_lanes", tmp);
+	vdd->dtsi_data.num_of_data_lanes = (!rc ? tmp[0] : 4);
+	
 
 	if (vdd->dtsi_data.samsung_reduce_display_on_time) {
 		/*
@@ -4499,6 +4590,8 @@ static void set_normal_br_values(struct samsung_display_driver_data *vdd)
 	else {
 		if (vdd->br.gamma_mode2_support)
 			table = &vdd->dtsi_data.candela_map_table[GAMMA_MODE2_NORMAL][vdd->panel_revision];
+		else if(vdd->br.multi_to_one_support)
+			table = &vdd->dtsi_data.candela_map_table[MULTI_TO_ONE_NORMAL][vdd->panel_revision];			
 		else
 			table = &vdd->dtsi_data.candela_map_table[NORMAL][vdd->panel_revision];
 	}
@@ -4546,15 +4639,15 @@ static void set_normal_br_values(struct samsung_display_driver_data *vdd)
 		vdd->br.pac_cd_idx = table->scaled_idx[p];
 		vdd->br.interpolation_cd = table->interpolation_cd[p];
 
-		LCD_INFO("[%d] pac_cd_idx (%d) cd_idx (%d) cd (%d) interpolation_cd (%d)\n",
+		LCD_INFO("[DISP_%d] [%d] pac_cd_idx (%d) cd_idx (%d) cd (%d) interpolation_cd (%d)\n", vdd->ndx,
 			p, vdd->br.pac_cd_idx, vdd->br.cd_idx, vdd->br.cd_level, vdd->br.interpolation_cd);
 	} else { 
 		if (vdd->br.gamma_mode2_support) {
 			vdd->br.gamma_mode2_cd = table->gamma_mode2_cd[p];
-			LCD_INFO("[%d] cd_idx (%d) cd (%d) panel_real_cd (%d)\n",
+			LCD_INFO("[DISP_%d] [%d] cd_idx (%d) cd (%d) panel_real_cd (%d)\n", vdd->ndx,
 				p, vdd->br.cd_idx, vdd->br.cd_level, vdd->br.gamma_mode2_cd);
 		} else {
-			LCD_INFO("[%d] cd_idx (%d) cd (%d) interpolation_cd (%d)\n",
+			LCD_INFO("[DISP_%d] [%d] cd_idx (%d) cd (%d) interpolation_cd (%d)\n", vdd->ndx,
 				p, vdd->br.cd_idx, vdd->br.cd_level, vdd->br.interpolation_cd);
 		}
 	}
@@ -4616,10 +4709,10 @@ static void set_hbm_br_values(struct samsung_display_driver_data *vdd)
 		vdd->br.pac_cd_idx = table->scaled_idx[p];
 		vdd->br.interpolation_cd = table->cd[p];
 
-		LCD_INFO("[%d] pac_cd_idx (%d) cd_idx (%d) cd (%d) interpolation_cd (%d) auto (%d)\n",
+		LCD_INFO("[DISP_%d] [%d] pac_cd_idx (%d) cd_idx (%d) cd (%d) interpolation_cd (%d) auto (%d)\n", vdd->ndx,
 			p, vdd->br.pac_cd_idx, vdd->br.cd_idx, vdd->br.cd_level, vdd->br.interpolation_cd, vdd->br.auto_level);
 	} else
-		LCD_INFO("[%d] cd_idx (%d) cd (%d) interpolation_cd (%d) auto (%d) \n",
+		LCD_INFO("[DISP_%d] [%d] cd_idx (%d) cd (%d) interpolation_cd (%d) auto (%d) \n", vdd->ndx,
 			p, vdd->br.cd_idx, vdd->br.cd_level, vdd->br.interpolation_cd, vdd->br.auto_level);
 
 	return;
@@ -5019,7 +5112,7 @@ bool is_hbm_level(struct samsung_display_driver_data *vdd)
 		return false;
 
 	if (vdd->br.bl_level > table->max_lv) {
-		LCD_ERR("bl_level(%d) is over max_level (%d), force set to max\n", vdd->br.bl_level, table->max_lv);
+		LCD_ERR("[DISP_%d] bl_level(%d) is over max_level (%d), force set to max\n", vdd->ndx, vdd->br.bl_level, table->max_lv);
 		vdd->br.bl_level = table->max_lv;
 	}
 
@@ -5416,7 +5509,7 @@ void ss_read_mtp(struct samsung_display_driver_data *vdd, int addr, int len, int
 	}
 
 	if (!ss_is_ready_to_send_cmd(vdd)) {
-		LCD_ERR("Panel is not ready. Panel State(%d)\n", vdd->panel_state);
+		LCD_ERR("[DISP_%d] Panel is not ready. Panel State(%d)\n", vdd->ndx, vdd->panel_state);
 		return;
 	}
 
@@ -5704,6 +5797,8 @@ void ss_panel_init(struct dsi_panel *panel)
 	INIT_WORK(&vdd->br.br_work, (work_func_t)ss_brightness_work);
 
 	LCD_INFO("window_color : [%s]\n", vdd->window_color);
+
+	vdd->force_white_flush = 0;
 
 	LCD_INFO("-- \n");
 }

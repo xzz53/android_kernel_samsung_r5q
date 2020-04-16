@@ -654,7 +654,10 @@ static void mfc_fod_set_cs100(struct mfc_charger_data *charger)
 
 	if (charger->pdata->cable_type != SEC_WIRELESS_PAD_NONE) {
 		for (i = 0; i < MFC_NUM_FOD_REG; i++)
-			mfc_reg_write(charger->client, MFC_WPC_FOD_0A_REG+i, 0x7f);
+			if (i % 2)
+				mfc_reg_write(charger->client, MFC_WPC_FOD_0A_REG+i, 0x7f);
+			else
+				mfc_reg_write(charger->client, MFC_WPC_FOD_0A_REG+i, 0xff);
 	}
 }
 
@@ -1131,10 +1134,9 @@ static bool is_sleep_mode_active(int pad_id)
 static void mfc_mis_align(struct mfc_charger_data *charger)
 {
 	pr_info("%s: Reset M0\n", __func__);
-	if (charger->pdata->cable_type == SEC_WIRELESS_PAD_WPC_HV ||
-		charger->pdata->cable_type == SEC_WIRELESS_PAD_PMA)
-		/* reset MCU of MFC IC */
-		mfc_set_cmd_l_reg(charger, MFC_CMD_MCU_RESET_MASK, MFC_CMD_MCU_RESET_MASK);
+
+	/* reset MCU of MFC IC */
+	mfc_set_cmd_l_reg(charger, MFC_CMD_MCU_RESET_MASK, MFC_CMD_MCU_RESET_MASK);
 }
 
 static bool mfc_tx_function_check(struct mfc_charger_data *charger)
@@ -2332,6 +2334,7 @@ static void mfc_reset_rx_power(struct mfc_charger_data *charger, u8 rx_power)
 		cancel_delayed_work(&charger->wpc_rx_power_work);
 	}
 #endif
+
 	if(charger->adt_transfer_status == WIRELESS_AUTH_PASS) {
 		union power_supply_propval value = {0, };
 		switch(rx_power) {
@@ -2391,6 +2394,7 @@ static void mfc_wpc_afc_vout_work(struct work_struct *work)
 	struct mfc_charger_data *charger =
 		container_of(work, struct mfc_charger_data, wpc_afc_vout_work.work);
 	union power_supply_propval value = {0, };
+	u8 cmd = 0;
 
 	pr_info("%s start, current cable(%d)\n", __func__, charger->pdata->cable_type);
 
@@ -2437,6 +2441,15 @@ static void mfc_wpc_afc_vout_work(struct work_struct *work)
 	charger->is_afc_tx = true;
 	pr_info("%s: is_afc_tx = %d vout read = %d\n",
 		__func__, charger->is_afc_tx, mfc_get_adc(charger, MFC_ADC_VOUT));
+
+	/* use all CM FETs for 10V wireless charging */
+#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
+	if (charger->pdata->cable_type == SEC_WIRELESS_PAD_WPC_HV_20)
+#endif
+	mfc_reg_write(charger->client, MFC_RX_COMM_MOD_FET_REG, 0x00);
+
+	mfc_reg_read(charger->client, MFC_RX_COMM_MOD_FET_REG, &cmd);
+	pr_info("%s: CM FET setting(0x%x) \n", __func__, cmd);
 
 	pr_info("%s: check state(Vmode:%d, Vstatus:%d, Otg:%d)\n", __func__,
 		charger->vout_mode, charger->pdata->vout_status, charger->is_otg_on);
@@ -3393,7 +3406,9 @@ out:
 			val->intval == WIRELESS_VOUT_10V_STEP) {
 			if (!charger->is_full_status && !is_shutdn) {
 				if (!charger->is_afc_tx) {
+#if !defined(CONFIG_SEC_BLOOMQ_PROJECT)
 					u8 cmd = 0;
+#endif
 					pr_info("%s: need to set afc tx before vout control\n", __func__);
 
 					if (charger->pdata->cable_type == SEC_WIRELESS_PAD_WPC_HV_20)
@@ -3408,11 +3423,13 @@ out:
 					pr_info("%s: is_afc_tx = %d vout read = %d \n",
 						__func__, charger->is_afc_tx, mfc_get_adc(charger, MFC_ADC_VOUT));
 
+#if !defined(CONFIG_SEC_BLOOMQ_PROJECT)
 					/* use all CM FETs for 10V wireless charging */
 					/* used when VOUT <= 8.5V OR VOUT > 8.5V AND IOUT >= 320mA */
 					mfc_reg_write(charger->client, MFC_RX_COMM_MOD_FET_REG, 0x00);
 					mfc_reg_read(charger->client, MFC_RX_COMM_MOD_FET_REG, &cmd);
 					pr_info("%s: CM FET setting(0x%x) \n", __func__, cmd);
+#endif
 				}
 				charger->vout_mode = val->intval;
 				cancel_delayed_work(&charger->wpc_vout_mode_work);
@@ -3521,6 +3538,7 @@ out:
 				__func__, charger->pdata->otp_firmware_ver, vout, vrect, iout, freq,
 				charger->pdata->wc_ic_rev, charger->pdata->cable_type);
 
+#if !defined(CONFIG_SEC_BLOOMQ_PROJECT)
 			if ((vout < 6500) && (charger->pdata->capacity >= 85)) {
 				mfc_reg_read(charger->client, MFC_RX_COMM_MOD_FET_REG, &tmp);
 				if (tmp != 0x00) {
@@ -3531,6 +3549,7 @@ out:
 					pr_info("%s: CM FET setting(0x%x)\n", __func__, tmp);
 				}
 			}
+#endif
 
 			for (i = 0; i < MFC_NUM_FOD_REG; i++)
 				mfc_reg_read(charger->client, MFC_WPC_FOD_0A_REG+i, &fod[i]);
@@ -3898,11 +3917,14 @@ static void mfc_wpc_det_work(struct work_struct *work)
 		charger->initial_vrect = false;
 	}
 
-	wake_lock(&charger->wpc_wake_lock);
-	pr_info("%s\n", __func__);
 	wc_w_state = gpio_get_value(charger->pdata->wpc_det);
+	if (charger->wc_w_state == wc_w_state)
+		return;
 
-	if ((charger->wc_w_state == 0) && (wc_w_state == 1)) {
+	wake_lock(&charger->wpc_wake_lock);
+	pr_info("%s: w(%d to %d)\n", __func__, charger->wc_w_state, wc_w_state);
+	charger->wc_w_state = wc_w_state;
+	if (charger->wc_w_state) {
 		charger->initial_wc_check = true;
 
 		charger->pdata->otp_firmware_ver = mfc_get_firmware_version(charger, MFC_RX_FIRMWARE);
@@ -3931,18 +3953,26 @@ static void mfc_wpc_det_work(struct work_struct *work)
 
 		/* SET OV 17V */
 		mfc_reg_write(charger->client, MFC_RX_OV_CLAMP_REG, 0x0);
-		/* SET ILIM */
+#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
+		/* SET ILIM 1.6A */
+		mfc_reg_write(charger->client, MFC_ILIM_SET_REG, 0x0F);
+#else
+		/* SET ILIM 1.5A */
 		mfc_reg_write(charger->client, MFC_ILIM_SET_REG, 0x0E);
-
+#endif
 		/* read vrect adjust */
 		mfc_reg_read(charger->client, MFC_VRECT_ADJ_REG, &vrect);
 
 		pr_info("%s: wireless charger activated, set V_INT as PN\n", __func__);
 
-		/* default value of CMA and CMB all enable
-			use all CM FETs for wireless charging */
 		mfc_reg_write(charger->client, MFC_RX_COMM_MOD_AFC_FET_REG, 0x00);
+#if !defined(CONFIG_SEC_BLOOMQ_PROJECT)
+		/* use CMA FET */
 		mfc_reg_write(charger->client, MFC_RX_COMM_MOD_FET_REG, 0x30);
+#else
+		/* use CMB FET */
+		mfc_reg_write(charger->client, MFC_RX_COMM_MOD_FET_REG, 0xC0);
+#endif
 
 		/* read pad mode */
 		mfc_reg_read(charger->client, MFC_SYS_OP_MODE_REG, &pad_mode);
@@ -3992,7 +4022,7 @@ static void mfc_wpc_det_work(struct work_struct *work)
 
 		wake_lock(&charger->wpc_tx_id_lock);
 		queue_delayed_work(charger->wqueue, &charger->wpc_tx_id_work, msecs_to_jiffies(2500));
-	} else if ((charger->wc_w_state == 1) && (wc_w_state == 0)) {
+	} else {
 		/* Send last tx_id to battery to cound tx_id */ 
 		value.intval = charger->tx_id;
 		psy_do_property("wireless", set, POWER_SUPPLY_PROP_AUTHENTIC, value);
@@ -4047,12 +4077,8 @@ static void mfc_wpc_det_work(struct work_struct *work)
 		wake_unlock(&charger->wpc_tx_wake_lock);
 		wake_unlock(&charger->wpc_tx_id_lock);
 	}
-
-	pr_info("%s: w(%d to %d)\n", __func__,
-		charger->wc_w_state, wc_w_state);
-
-	charger->wc_w_state = wc_w_state;
 	wake_unlock(&charger->wpc_wake_lock);
+	pr_info("%s : end\n", __func__);
 }
 
 /* INT_A */
@@ -4323,6 +4349,7 @@ static void mfc_wpc_isr_work(struct work_struct *work)
 				pr_info("%s: change cable type\n", __func__);
 				psy_do_property("wireless", set, POWER_SUPPLY_PROP_ONLINE, value);
 			}
+
 			/* send rx power informaion of this pad such as SEC_WIRELESS_RX_POWER_12W, SEC_WIRELESS_RX_POWER_17_5W */
 			value.intval = charger->max_power_by_txid;
 			psy_do_property("wireless", set, POWER_SUPPLY_PROP_WIRELESS_RX_POWER, value);
@@ -5341,6 +5368,7 @@ static int mfc_charger_probe(
 	charger->wc_rx_fod = false;
 	charger->adt_transfer_status = WIRELESS_AUTH_WAIT;
 	charger->current_rx_power = TX_RX_POWER_0W;
+	charger->tx_id = TX_ID_UNKNOWN;
 	charger->tx_id_cnt = 0;
 	charger->initial_vrect = false;
 	charger->wc_ldo_status = MFC_LDO_ON;
@@ -5523,11 +5551,13 @@ static int mfc_charger_suspend(struct device *dev)
 {
 	struct mfc_charger_data *charger = dev_get_drvdata(dev);
 
-	pr_info("%s\n", __func__);
+	pr_info("%s det(%d) int(%d)\n", __func__, 
+		gpio_get_value(charger->pdata->wpc_det),
+		gpio_get_value(charger->pdata->wpc_int));
 
 	charger->is_suspend = true;
 
-	if (device_may_wakeup(charger->dev)){
+	if (device_may_wakeup(charger->dev)) {
 		enable_irq_wake(charger->pdata->irq_wpc_int);
 		enable_irq_wake(charger->pdata->irq_wpc_det);
 	}
@@ -5541,7 +5571,9 @@ static int mfc_charger_resume(struct device *dev)
 {
 	struct mfc_charger_data *charger = dev_get_drvdata(dev);
 
-	pr_info("%s\n", __func__);
+	pr_info("%s det(%d) int(%d)\n", __func__,
+		gpio_get_value(charger->pdata->wpc_det),
+		gpio_get_value(charger->pdata->wpc_int));
 
 	charger->is_suspend = false;
 
@@ -5572,7 +5604,17 @@ static void mfc_charger_shutdown(struct i2c_client *client)
 		pr_info("%s: forced 5V Vout\n", __func__);
 		mfc_set_vrect_adjust(charger, MFC_HEADROOM_1);
 		mfc_set_vout(charger, MFC_VOUT_5V);
+
+#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
+		if (charger->is_afc_tx)
+			mfc_send_command(charger, MFC_AFC_CONF_5V_TX);
+#endif
 	}
+
+#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
+	gpio_direction_output(charger->pdata->wpc_en, 1);
+	pr_info("%s: disable wpc_en\n", __func__);
+#endif
 }
 
 static const struct i2c_device_id mfc_charger_id_table[] = {

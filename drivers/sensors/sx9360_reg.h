@@ -111,6 +111,7 @@ enum {
 	SX9360_AGAINFREQ_REG_IDX = 7,
 	SX9360_REFGAINRAWFILT_REG_IDX = 8,
 	SX9360_GAINRAWFILT_REG_IDX = 9,
+	SX9360_AVGFILT_REG_IDX = 12,
 	SX9360_HYST_REG_IDX = 13,
 	SX9360_PROXTHRESH_REG_IDX = 14,
 };
@@ -123,6 +124,7 @@ enum {
 #define SX9360_AGAINFREQ	"sx9360,againfreq_reg"
 #define SX9360_REFGAINRAWFILT	"sx9360,refgainrawfilt_reg"
 #define SX9360_GAINRAWFILT	"sx9360,gainrawfilt_reg"
+#define SX9360_AVGFILT          "sx9360,avgfilt_reg"
 #define SX9360_HYST		"sx9360,hyst_reg"
 #define SX9360_PROXTHRESH	"sx9360,proxthresh_reg"
 #define SX9360_HALLIC_CERT      "sx9360,hallic_cert_detect"

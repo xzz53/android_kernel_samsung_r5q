@@ -48,9 +48,6 @@ extern unsigned int lpcharge;
 
 static bool debug_en_vps;
 static void max77705_muic_detect_dev(struct max77705_muic_data *muic_data, int irq);
-#if defined(CONFIG_CCIC_MAX77705)
-static int fw_update_dcd = 1;
-#endif
 
 struct max77705_muic_data *g_muic_data;
 
@@ -1405,10 +1402,9 @@ handle_attach:
 		ret = max77705_muic_attach_usb_path(muic_data, new_dev);
 		break;
 	case ATTACHED_DEV_TIMEOUT_OPEN_MUIC:
+		pr_info("%s DCD_TIMEOUT system_state = 0x%x\n", __func__, system_state);
 #if defined(CONFIG_CCIC_MAX77705)
-		if (fw_update_state == FW_UPDATE_END && fw_update_dcd) {
-			fw_update_dcd = 0;
-			pr_info("%s:%s DCD_TIMEOUT is recognized after F/W update\n", MUIC_DEV_NAME, __func__);
+		if (fw_update_state == FW_UPDATE_END && system_state < SYSTEM_RUNNING) {
 			/* TA Reset, D+ gnd*/
 			max77705_muic_dp_reset(muic_data);
 

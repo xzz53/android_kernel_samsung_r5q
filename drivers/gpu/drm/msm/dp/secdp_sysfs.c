@@ -120,7 +120,8 @@ static ssize_t dex_show(struct class *class,
 	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
 	struct secdp_dex *dex = &sysfs->sec->dex;
 
-	if (!secdp_get_cable_status() || !secdp_get_hpd_status() || secdp_get_poor_connection_status()) {
+	if (!secdp_get_cable_status() || !secdp_get_hpd_status() ||
+			secdp_get_poor_connection_status() || !secdp_get_link_train_status()) {
 		pr_info("cable is out\n");
 		dex->prev = dex->curr = DEX_DISABLED;
 	}
@@ -139,7 +140,7 @@ static ssize_t dex_store(struct class *class,
 {
 	int val[4] = {0,};
 	int setting_ui;	/* setting has Dex mode? if yes, 1. otherwise 0 */
-	int run;		/* dex is running now? if yes, 1. otherwise 0 */
+	int run;	/* dex is running now? if yes, 1. otherwise 0 */
 
 	struct secdp_sysfs_private *sysfs = g_secdp_sysfs;
 	struct secdp_misc *sec = sysfs->sec;
@@ -182,9 +183,16 @@ static ssize_t dex_store(struct class *class,
 	}
 	mutex_unlock(&sec->notifier_lock);
 
-	if (!secdp_get_cable_status() || !secdp_get_hpd_status() || secdp_get_poor_connection_status()) {
+	if (!secdp_get_cable_status() || !secdp_get_hpd_status() ||
+			secdp_get_poor_connection_status() || !secdp_get_link_train_status()) {
 		pr_info("cable is out\n");
 		dex->prev = dex->curr = DEX_DISABLED;
+		goto exit;
+	}
+
+	if (sec->hpd_noti_deferred) {
+		secdp_send_deferred_hpd_noti();
+		dex->prev = dex->setting_ui;
 		goto exit;
 	}
 

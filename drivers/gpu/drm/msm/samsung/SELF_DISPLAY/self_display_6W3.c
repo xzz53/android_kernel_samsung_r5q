@@ -799,7 +799,7 @@ static void self_mask_img_write(struct samsung_display_driver_data *vdd)
 	}
 	/*To prevent self image disabled at boot time, during send these cmd 
 	  => by block with samsung_splash_enabled, make it uses self mask img from UEFI */
-	if (vdd->samsung_splash_enabled) {
+	if (vdd->samsung_splash_enabled && !vdd->is_factory_mode) {
 		LCD_INFO("samsung_splash_enabled - skip to send self_mask_img\n");
 		return;
 	}
@@ -828,7 +828,7 @@ static void self_mask_on(struct samsung_display_driver_data *vdd, int enable)
 	}
 	/*To prevent self image disabled at boot time, during send these cmd 
 	  => by block with samsung_splash_enabled, make it uses self mask img from UEFI */
-	if (vdd->samsung_splash_enabled) {
+	if (vdd->samsung_splash_enabled && !vdd->is_factory_mode) {
 		LCD_INFO("samsung_splash_enabled - skip to send self_mask_on\n");
 		return;
 	}

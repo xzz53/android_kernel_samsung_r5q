@@ -2183,6 +2183,90 @@ config MACH_GTS6L_EUR_OPEN
         help
           Support for Samsung GTS6L EUR OPEN device.
 
+config MACH_GTS6L_KOR_OPEN
+        depends on SEC_GTS6L_PROJECT
+        default n
+        bool "Samsung GTS6L KOR OPEN"
+        help
+          Support for Samsung GTS6L KOR OPEN device.
+
+config MACH_GTS6L_MEA_TUR
+        depends on SEC_GTS6L_PROJECT
+        default n
+        bool "Samsung GTS6L MEA TUR"
+        help
+          Support for Samsung GTS6L MEA TUR device.
+
+config MACH_GTS6L_USA_VZW
+        depends on SEC_GTS6L_PROJECT
+        default n
+        bool "Samsung GTS6L USA VZW"
+        help
+          Support for Samsung GTS6L USA VZW device.
+
+config MACH_GTS6L_USA_USC
+        depends on SEC_GTS6L_PROJECT
+        default n
+        bool "Samsung GTS6L USA USC"
+        help
+          Support for Samsung GTS6L USA USC device.
+
+config MACH_GTS6L_USA_SINGLE
+        depends on SEC_GTS6L_PROJECT
+        default n
+        bool "Samsung GTS6L USA SQ"
+        help
+          Support for Samsung GTS6L USA SQ device.
+
+config MACH_GTS6L_CHN_OPEN
+        depends on SEC_GTS6L_PROJECT
+        default n
+        bool "Samsung GTS6L CHN OPEN"
+        help
+          Support for Samsung GTS6L CHN OPEN device.
+
+config MACH_GTS6L_CHN_HK
+        depends on SEC_GTS6L_PROJECT
+        default n
+        bool "Samsung GTS6L CHN HK"
+        help
+          Support for Samsung GTS6L CHN HK device.
+
+config SEC_GTS6LWIFI_PROJECT
+	depends on ARCH_SM8150
+	default n
+	bool "Samsung GTS6LWIFI Project"
+	help
+	  Support for Samsung GTS6LWIFI Project
+
+config MACH_GTS6LWIFI_EUR_OPEN
+        depends on SEC_GTS6LWIFI_PROJECT
+        default n
+        bool "Samsung GTS6LWIFI EUR OPEN"
+        help
+          Support for Samsung GTS6LWIFI EUR OPEN device.
+
+config MACH_GTS6LWIFI_CHN_OPEN
+        depends on SEC_GTS6LWIFI_PROJECT
+        default n
+        bool "Samsung GTS6LWIFI CHN OPEN"
+        help
+          Support for Samsung GTS6LWIFI CHN OPEN device.
+
+config SEC_GTS6X_PROJECT
+	depends on ARCH_SM8150
+	default n
+	bool "Samsung GTS6X Project"
+	help
+	  Support for Samsung GTS6X Project
+
+config MACH_GTS6X_KOR_OPEN
+        depends on SEC_GTS6X_PROJECT
+        default n
+        bool "Samsung GTS6X KOR OPEN"
+        help
+          Support for Samsung GTS6X KOR OPEN device.
+
 config SEC_BLOOMQ_PROJECT
         depends on ARCH_SM8150
         default n
@@ -2246,6 +2330,13 @@ config MACH_BLOOMQ_JPN_KDI
         help
           Support for Samsung BLOOMQ JPN KDI device.
 
+config MACH_BLOOMQ_JPN_OPEN
+        depends on SEC_BLOOMQ_PROJECT
+        default n
+        bool "Samsung BLOOMQ JPN OPEN"
+        help
+          Support for Samsung BLOOMQ JPN OPEN device.
+
 config SEC_R3Q_PROJECT
         depends on ARCH_SM8150
         default n
@@ -2308,6 +2399,27 @@ config MACH_R5Q_CHN_HK
         bool "Samsung R5Q CHN HK"
         help
           Support for Samsung R5Q CHN HK device.
+
+config MACH_R5Q_USA_OPEN
+        depends on SEC_R5Q_PROJECT
+        default n
+        bool "Samsung R5Q USA OPEN"
+        help
+          Support for Samsung R5Q USA OPEN device.
+
+config SEC_ZODIAC_PROJECT
+        depends on ARCH_SM8150
+        default n
+        bool "Samsung ZODIAC Project"
+        help
+          Support for Samsung ZODIAC Project
+
+config MACH_ZODIAC_CHN_OPEN
+        depends on SEC_ZODIAC_PROJECT
+        default n
+        bool "Samsung ZODIAC CHN OPEN"
+        help
+          Support for Samsung ZODIAC CHN OPEN device.
 
 config LOD_SEC
 	bool "kernel security re-enforcement for Linux On Dex, including cap re-check and seccomp report"

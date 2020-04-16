@@ -1133,6 +1133,9 @@ static void dfc_update_tx_link_status(struct net_device *dev,
 	if (!itm)
 		return;
 
+	net_log("Link> %s, b=%d, gr=%d, rs=%d, status %d\n", dev->name,
+		binfo->bearer_id, itm->grant_size, itm->rat_switch, tx_status);
+		
 	/* If no change in tx status, ignore */
 	if (itm->tx_off == !tx_status)
 		return;
@@ -1150,8 +1153,6 @@ static void dfc_update_tx_link_status(struct net_device *dev,
 	}
 
 	itm->tx_off = !tx_status;
-	net_log("Link> %s, b=%d, status %d\n", dev->name,
-		binfo->bearer_id, tx_status);
 }
 
 void dfc_handle_tx_link_status_ind(struct dfc_qmi_data *dfc,

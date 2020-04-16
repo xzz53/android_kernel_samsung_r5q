@@ -69,7 +69,6 @@ enum power_supply_ext_property {
 	POWER_SUPPLY_EXT_PROP_WIRELESS_INITIAL_WC_CHECK,
 	POWER_SUPPLY_EXT_PROP_WIRELESS_PARAM_INFO,
 	POWER_SUPPLY_EXT_PROP_WIRELESS_CHECK_FW_VER,
-	POWER_SUPPLY_EXT_PROP_WIRELESS_TXMODE_DISCON,
 	POWER_SUPPLY_EXT_PROP_AICL_CURRENT,
 	POWER_SUPPLY_EXT_PROP_CHECK_MULTI_CHARGE,
 	POWER_SUPPLY_EXT_PROP_CHIP_ID,
@@ -91,6 +90,7 @@ enum power_supply_ext_property {
 	POWER_SUPPLY_EXT_PROP_AUTO_SHIPMODE_CONTROL,
 	POWER_SUPPLY_EXT_PROP_WIRELESS_TIMER_ON,
 	POWER_SUPPLY_EXT_PROP_CALL_EVENT,
+	POWER_SUPPLY_EXT_PROP_GEAR_PHM_EVENT,
 	POWER_SUPPLY_EXT_PROP_DEFAULT_CURRENT,
 	POWER_SUPPLY_PROP_WIRELESS_RX_POWER,
 	POWER_SUPPLY_PROP_WIRELESS_MAX_VOUT,
@@ -137,6 +137,7 @@ enum power_supply_ext_property {
 	POWER_SUPPLY_EXT_PROP_DIRECT_FLOAT_MAX,
 	POWER_SUPPLY_EXT_PROP_DIRECT_ADC_CTRL,
 	POWER_SUPPLY_EXT_PROP_DIRECT_HV_PDO,
+	POWER_SUPPLY_EXT_PROP_DIRECT_HAS_APDO,
 	POWER_SUPPLY_EXT_PROP_DIRECT_POWER_TYPE,
 	POWER_SUPPLY_EXT_PROP_DIRECT_TA_ALERT,
 	POWER_SUPPLY_EXT_PROP_DIRECT_PPS,
@@ -146,12 +147,13 @@ enum power_supply_ext_property {
 	POWER_SUPPLY_EXT_PROP_DIRECT_BUCK_OFF,
 	POWER_SUPPLY_EXT_PROP_DIRECT_HARD_RESET,
 	POWER_SUPPLY_EXT_PROP_DIRECT_PPS_DISABLE,
+	POWER_SUPPLY_EXT_PROP_DIRECT_CLEAR_ERR,
+	POWER_SUPPLY_EXT_PROP_CHANGE_CHARGING_SOURCE,
+	POWER_SUPPLY_EXT_PROP_DIRECT_SEND_UVDM,
 #endif
 	POWER_SUPPLY_EXT_PROP_SRCCAP,
 	POWER_SUPPLY_EXT_PROP_CHARGE_BOOST,
-#if defined(CONFIG_LSI_IFPMIC)
 	POWER_SUPPLY_EXT_PROP_UPDATE_BATTERY_DATA,
-#endif
 	POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING,
 	POWER_SUPPLY_EXT_PROP_FUELGAUGE_FACTORY,
 	POWER_SUPPLY_EXT_PROP_FACTORY_VOLTAGE_REGULATION,
@@ -164,6 +166,7 @@ enum power_supply_ext_property {
 	POWER_SUPPLY_EXT_PROP_FLED_BOOST_OFF,
 #endif
 	POWER_SUPPLY_EXT_PROP_BYPASS_MODE_DISABLE,
+	POWER_SUPPLY_EXT_PROP_FULL_CONDITION,
 };
 
 enum rx_device_type {
@@ -529,11 +532,12 @@ enum sec_battery_inbat_fgsrc_switching {
 #define BATT_TX_EVENT_WIRELESS_TX_MISALIGN      0x00002000
 #define BATT_TX_EVENT_WIRELESS_TX_ETC			0x00004000
 #define BATT_TX_EVENT_WIRELESS_TX_RETRY			0x00008000
-#define BATT_TX_EVENT_WIRELESS_ALL_MASK			0x0000ffff
+#define BATT_TX_EVENT_WIRELESS_TX_5V_TA			0x00010000
+#define BATT_TX_EVENT_WIRELESS_ALL_MASK			0x0001ffff
 #define BATT_TX_EVENT_WIRELESS_TX_ERR			(BATT_TX_EVENT_WIRELESS_TX_FOD | BATT_TX_EVENT_WIRELESS_TX_HIGH_TEMP | \
 	BATT_TX_EVENT_WIRELESS_RX_UNSAFE_TEMP | BATT_TX_EVENT_WIRELESS_RX_CHG_SWITCH | BATT_TX_EVENT_WIRELESS_RX_CS100 | \
 	BATT_TX_EVENT_WIRELESS_TX_OTG_ON | BATT_TX_EVENT_WIRELESS_TX_LOW_TEMP | BATT_TX_EVENT_WIRELESS_TX_SOC_DRAIN | \
-	BATT_TX_EVENT_WIRELESS_TX_CRITICAL_EOC | BATT_TX_EVENT_WIRELESS_TX_CAMERA_ON | BATT_TX_EVENT_WIRELESS_TX_OCP | BATT_TX_EVENT_WIRELESS_TX_MISALIGN | BATT_TX_EVENT_WIRELESS_TX_ETC)
+	BATT_TX_EVENT_WIRELESS_TX_CRITICAL_EOC | BATT_TX_EVENT_WIRELESS_TX_CAMERA_ON | BATT_TX_EVENT_WIRELESS_TX_OCP | BATT_TX_EVENT_WIRELESS_TX_MISALIGN | BATT_TX_EVENT_WIRELESS_TX_ETC | BATT_TX_EVENT_WIRELESS_TX_5V_TA)
 
 #define SEC_BAT_TX_RETRY_NONE			0x0000
 #define SEC_BAT_TX_RETRY_MISALIGN		0x0001
@@ -1009,11 +1013,15 @@ struct sec_battery_platform_data {
 	unsigned int ttf_wireless_charge_current;
 	unsigned int ttf_dc25_charge_current;
 	unsigned int ttf_dc45_charge_current;
+	unsigned int ttf_normal_charge_current;
 #endif
 
 #if defined(CONFIG_STEP_CHARGING)
 	/* step charging */
 	unsigned int *step_charging_condition;
+#if defined(CONFIG_DUAL_BATTERY)
+	unsigned int *step_charging_condition_vsub;
+#endif
 	unsigned int *step_charging_condition_curr;
 	unsigned int *step_charging_current;
 	unsigned int *step_charging_float_voltage;
@@ -1266,6 +1274,7 @@ struct sec_battery_platform_data {
 #endif	
 	int siop_hv_input_limit_current;
 	int siop_hv_input_limit_current_2nd;
+	int siop_store_hv_input_limit_current_2nd;
 	int siop_hv_charging_limit_current;
 #if defined(CONFIG_DUAL_BATTERY)
 	int siop_main_hv_charging_limit_current;
@@ -1323,6 +1332,9 @@ struct sec_battery_platform_data {
 	unsigned int cisd_cap_low_thr;
 	unsigned int cisd_cap_limit;
 	unsigned int max_voltage_thr;
+#if defined(CONFIG_STEP_CHARGING)
+	unsigned int max_voltage_thr_step;
+#endif
 	unsigned int cisd_alg_index;
 	unsigned int *ignore_cisd_index;
 	unsigned int *ignore_cisd_index_d;
@@ -1358,11 +1370,13 @@ struct sec_battery_platform_data {
 	unsigned int tx_uno_vout;
 	unsigned int tx_uno_iout;
 	unsigned int tx_gear_vout;
+	unsigned int tx_gear_vout_delay;
 	unsigned int tx_mfc_iout_gear;
 	unsigned int tx_mfc_iout_phone;
 	unsigned int tx_mfc_iout_phone_5v;
 	unsigned int tx_mfc_iout_lcd_on;
 
+	int batt_temp_adj_gap;
 	/* ADC type for each channel */
 	unsigned int adc_type[];
 };

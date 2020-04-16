@@ -24,9 +24,6 @@
 
 #ifndef __MUIC_H__
 #define __MUIC_H__
-#if defined(CONFIG_MUIC_S2MU106)
-#define TEMP_S2MU106
-#endif
 
 /* Status of IF PMIC chip (suspend and resume) */
 enum {
@@ -43,6 +40,12 @@ enum {
 enum muic_op_mode {
 	OPMODE_MUIC = 0<<0,
 	OPMODE_CCIC = 1<<0,
+};
+
+/* MUIC One Binary */
+enum {
+	MUIC_ONE_DEFAULT	= 0,
+	MUIC_ONE_S2MU,
 };
 
 /* MUIC Dock Observer Callback parameter */
@@ -344,11 +347,7 @@ struct muic_platform_data {
 	void (*cleanup_switch_dev_cb) (void);
 
 	/* muic GPIO control function */
-#if defined(CONFIG_CCIC_S2MU107) || defined(CONFIG_CCIC_S2MU106) || defined(TEMP_S2MU106)
-	int (*init_gpio_cb) (void *, int switch_sel);
-#else
 	int (*init_gpio_cb) (int switch_sel);
-#endif
 
 	int (*set_gpio_usb_sel) (int usb_path);
 	int (*set_gpio_uart_sel) (int uart_path);
@@ -446,7 +445,7 @@ do {									\
 #define IS_VCHGIN_5V(x) ((4000 <= x) && (x <= 6000))
 
 #define AFC_MRXRDY_CNT_LIMIT (3)
-#define AFC_MPING_RETRY_CNT_LIMIT (20)
+#define AFC_MPING_RETRY_CNT_LIMIT (10)
 #define AFC_QC_RETRY_CNT_LIMIT (3)
 #define VCHGIN_CHECK_CNT_LIMIT (3)
 #define AFC_QC_RETRY_WAIT_CNT_LIMIT (3)

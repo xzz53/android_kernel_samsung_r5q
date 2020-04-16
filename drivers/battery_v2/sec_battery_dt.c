@@ -148,6 +148,15 @@ int sec_bat_parse_dt(struct device *dev,
 		pdata->max_voltage_thr = 4400;
 	}
 
+#if defined(CONFIG_STEP_CHARGING)
+	ret = of_property_read_u32(np, "battery,cisd_max_voltage_thr_step",
+		&pdata->max_voltage_thr_step);
+	if (ret) {
+		pr_info("%s : cisd_max_voltage_thr_step is Empty\n", __func__);
+		pdata->max_voltage_thr_step = pdata->max_voltage_thr;
+	}
+#endif
+
 	ret = of_property_read_u32(np, "battery,cisd_alg_index",
 			&pdata->cisd_alg_index);
 	if (ret) {
@@ -1071,6 +1080,14 @@ int sec_bat_parse_dt(struct device *dev,
 		pdata->tx_gear_vout = WC_TX_VOUT_5_0V;
 	}
 
+	ret = of_property_read_u32(np, "battery,tx_gear_vout_delay",
+				   &temp);
+	pdata->tx_gear_vout_delay = (int)temp;
+	if (ret) {
+		pr_info("%s : tx_gear_vout_delay is Empty\n", __func__);
+		pdata->tx_gear_vout_delay = 0;
+	}
+
 	ret = of_property_read_u32(np, "battery,charging_limit_by_tx_check",
 				   &pdata->charging_limit_by_tx_check);
 	if (ret)
@@ -1471,6 +1488,13 @@ int sec_bat_parse_dt(struct device *dev,
 		pr_info("%s: ttf_dc45_charge_current is Empty, Defualt value 0 \n", __func__);
 		pdata->ttf_dc45_charge_current = pdata->ttf_dc25_charge_current;
 	}
+
+	ret = of_property_read_u32(np, "battery,ttf_normal_charge_current",
+					&pdata->ttf_normal_charge_current);
+	if (ret) {
+		pr_info("%s: ttf_normal_charge_current is Empty, Defualt value \n", __func__);
+		pdata->ttf_normal_charge_current = pdata->default_input_current;
+	}
 #endif
 
 #if defined(CONFIG_WIRELESS_FIRMWARE_UPDATE)
@@ -1588,6 +1612,11 @@ int sec_bat_parse_dt(struct device *dev,
 			&pdata->siop_hv_input_limit_current_2nd);
 	if (ret)
 		pdata->siop_hv_input_limit_current_2nd = pdata->siop_hv_input_limit_current;
+
+	ret = of_property_read_u32(np, "battery,siop_store_hv_input_limit_current_2nd",
+			&pdata->siop_store_hv_input_limit_current_2nd);
+	if (ret)
+		pdata->siop_store_hv_input_limit_current_2nd = pdata->siop_hv_input_limit_current_2nd;
 
 	ret = of_property_read_u32(np, "battery,siop_hv_charging_limit_current",
 			&pdata->siop_hv_charging_limit_current);
@@ -1761,6 +1790,8 @@ int sec_bat_parse_dt(struct device *dev,
 		pdata->ovp_uvlo_check_type, pdata->thermal_source,
 		pdata->temp_check_type, pdata->temp_check_count, pdata->nv_charge_power);
 
+	ret = of_property_read_u32(np, "battery,batt_temp_adj_gap",
+			&pdata->batt_temp_adj_gap);
 #if defined(CONFIG_STEP_CHARGING)
 	sec_step_charging_init(battery, dev);
 #endif

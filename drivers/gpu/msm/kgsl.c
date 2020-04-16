@@ -4902,7 +4902,13 @@ static int kgsl_mmap(struct file *file, struct vm_area_struct *vma)
 		for (i = 0; i < m->page_count; i++) {
 			struct page *page = m->pages[i];
 
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+			ret = vm_insert_page(vma, addr, page);
+			if (ret)
+				panic("kgsl vmap fail");
+#else
 			vm_insert_page(vma, addr, page);
+#endif
 			addr += PAGE_SIZE;
 		}
 		atomic64_add(m->size, &m->mapsize);

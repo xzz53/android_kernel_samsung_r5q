@@ -78,7 +78,7 @@ extern unsigned int lpcharge;
 //#define GLOVE_MODE
 
 #define MAX_FW_PATH 255
-#define TSP_FW_FILENAME "zinitix_fw.bin"
+#define TSP_FW_FILENAME "tsp.bin"
 
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 #include <linux/trustedui.h>
@@ -136,6 +136,23 @@ name = "zinitix_isp" , addr 0x50*/
 #define DELAY_FOR_POST_TRANSCATION	10
 
 #define ZINITIX_I2C_RETRY_CNT		2
+
+#define ZINITIX_STATUS_UNFOLDING	0x00
+#define ZINITIX_STATUS_FOLDING		0x01
+
+enum tsp_status_call_pos {
+	ZINITIX_STATE_CHK_POS_OPEN = 0,
+	ZINITIX_STATE_CHK_POS_CLOSE,
+	ZINITIX_STATE_CHK_POS_HALL,
+	ZINITIX_STATE_CHK_POS_SYSFS,
+};
+
+/* ZINITIX_TS_DEBUG : Print event contents */
+#define ZINITIX_TS_DEBUG_PRINT_ALLEVENT		0x01
+#define ZINITIX_TS_DEBUG_PRINT_ONEEVENT		0x02
+#define ZINITIX_TS_DEBUG_PRINT_I2C_READ_CMD	0x04
+#define ZINITIX_TS_DEBUG_PRINT_I2C_WRITE_CMD	0x08
+#define ZINITIX_TS_DEBUG_SEND_UEVENT		0x80
 
 enum power_control {
 	POWER_OFF,
@@ -557,7 +574,6 @@ struct zt7538_lpm_setting {
 	u8 flag;
 	u8 data;
 };
-struct zt7538_lpm_setting lpm_mode_reg;
 
 #if ESD_TIMER_INTERVAL
 static struct workqueue_struct *esd_tmr_workqueue;
@@ -672,6 +688,9 @@ struct zt75xx_ts_info {
 	u16 fw_hw_id_bin;
 	u16 fw_ic_revision_bin;
 
+	struct zt7538_lpm_setting lpm_mode_reg; /* ic setting */
+	u8 lowpower_mode; /* AP setting */
+
 	u16 icon_event_reg;
 	u16 prev_icon_event;
 	/*u16 event_type;*/
@@ -711,9 +730,12 @@ struct zt75xx_ts_info {
 	int change_flip_status;
 	struct mutex switching_mutex;
 	struct delayed_work switching_work;
+#ifdef CONFIG_FOLDER_HALL
 	struct notifier_block hall_ic_nb;
 #endif
+#endif
 	struct notifier_block nb;
+	int main_tsp_status;
 
 	struct delayed_work work_read_info;
 	bool info_work_done;
@@ -733,8 +755,6 @@ struct zt75xx_ts_info {
 	atomic_t secure_pending_irqs;
 	struct completion secure_powerdown;
 	struct completion secure_interrupt;
-	struct clk *core_clk;
-	struct clk *iface_clk;
 #endif
 
 	struct ts_test_result	test_result;
@@ -748,16 +768,11 @@ struct zt75xx_ts_info {
 	s16 Gap_Gap_val;
 	s16 Gap_node_num;
 	struct pinctrl *pinctrl;
-	bool tsp_pwr_enabled;
 #ifdef CONFIG_VBUS_NOTIFIER
 	struct notifier_block vbus_nb;
 #endif
 	u8 cover_type;
 	bool flip_enable;
-	bool spay_enable;
-	bool aod_enable;
-	bool aot_enable;
-	bool sleep_mode;
 	bool glove_touch;
 
 	unsigned int scrub_id;
@@ -775,7 +790,7 @@ struct zt75xx_ts_info {
 
 	struct sec_tclm_data *tdata;
 	bool is_cal_done;
-	int debug_string;
+	int debug_flag;
 	u8 ito_test[4];
 };
 
@@ -810,6 +825,7 @@ extern int get_lcd_attached(char *mode);
 
 
 /* define i2c sub functions*/
+#define ZINITIX_REG_ADDR_LENGTH	2
 static inline s32 read_data(struct i2c_client *client,
 	u16 reg, u8 *values, u16 length)
 {
@@ -817,6 +833,13 @@ static inline s32 read_data(struct i2c_client *client,
 	s32 ret;
 	int count = 0;
 	struct i2c_msg msg[2];
+	u8 *pkt = NULL;
+	u8 *data = NULL;
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		return -ENODEV;
+	}
 
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
@@ -833,17 +856,29 @@ static inline s32 read_data(struct i2c_client *client,
 	}
 #endif
 
+	pkt = kzalloc(ZINITIX_REG_ADDR_LENGTH, GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+
+	pkt[0] = (u8)(reg & 0xFF);
+	pkt[1] = (u8)((reg >> 8) & 0xFF);
+
+	data = kzalloc(length, GFP_KERNEL);
+	if (!data) {
+		kfree(pkt);
+		return -ENOMEM;
+	}
 retry:
 
 	msg[0].addr = client->addr;
 	msg[0].flags = 0;
-	msg[0].len = 2;
-	msg[0].buf = (u8 *)(&reg);
+	msg[0].len = ZINITIX_REG_ADDR_LENGTH;
+	msg[0].buf = pkt;
 
 	msg[1].addr = client->addr;
 	msg[1].flags = I2C_M_RD;
 	msg[1].len = length;
-	msg[1].buf = values;
+	msg[1].buf = data;
 
 	ret = i2c_transfer(client->adapter, msg, 2);
 	if (ret != 2) {
@@ -855,16 +890,24 @@ retry:
 		info->comm_err_count++;
 		input_err(true, &info->client->dev, "%s: failed %d\n", __func__, ret);
 
+		kfree(pkt);
+		kfree(data);
 		return -EIO;
 	}
-	if (info->debug_string) {
+
+	memcpy(values, data, length);
+	kfree(pkt);
+	kfree(data);
+
+	if (info->debug_flag & ZINITIX_TS_DEBUG_PRINT_I2C_READ_CMD) {
 		int i;
-		pr_info("[sec_input] zinitix: %s: W:%04X R:", __func__, reg);
+		pr_info("[sec_input] zinitix: %s: W: %04X R:", __func__, reg);
 		for (i = 0; i < length; i++) {
 			pr_cont(" %02X", values[i]);
 		}
 		pr_cont("\n");
 	}
+
 	return length;
 }
 
@@ -875,6 +918,12 @@ static s32 read_data_only(struct i2c_client *client, u8 *values, u16 length)
 	struct zt75xx_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
 	int count = 0;
+	u8 *data = NULL;
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		return -ENODEV;
+	}
 
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
@@ -890,8 +939,11 @@ static s32 read_data_only(struct i2c_client *client, u8 *values, u16 length)
 		return -EBUSY;
 	}
 #endif
+	data = kzalloc(length, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
 retry:
-	ret = i2c_master_recv(client, values, length);
+	ret = i2c_master_recv(client, data, length);
 	if (ret < 0) {
 		input_err(true, &client->dev, "%s: failed to recv. ret:%d, try:%d\n",
 			__func__, ret, count + 1);
@@ -900,11 +952,15 @@ retry:
 			goto retry;
 
 		info->comm_err_count++;
+		kfree(data);
 		return ret;
 	}
 	usleep_range(DELAY_FOR_TRANSCATION, DELAY_FOR_TRANSCATION);
 
-	if (info->debug_string) {
+	memcpy(values, data, length);
+	kfree(data);
+
+	if (info->debug_flag & ZINITIX_TS_DEBUG_PRINT_I2C_READ_CMD) {
 		int i;
 		pr_info("[sec_input] zinitix: %s: R:", __func__);
 		for (i = 0; i < length; i++) {
@@ -912,6 +968,7 @@ retry:
 		}
 		pr_cont("\n");
 	}
+
 	return length;
 }
 #endif
@@ -926,6 +983,11 @@ static inline s32 write_data(struct i2c_client *client,
 //	u8 pkt[66]; /* max packet */
 	u8 *pkt;
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		return -ENODEV;
+	}
+
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
 		input_err(true, &client->dev,
@@ -940,24 +1002,17 @@ static inline s32 write_data(struct i2c_client *client,
 		return -EBUSY;
 	}
 #endif
-	pkt = kzalloc(66, GFP_KERNEL);
+
+	pkt = kzalloc(ZINITIX_REG_ADDR_LENGTH + length, GFP_KERNEL);
 	if (!pkt)
 		return -ENOMEM;
 
 	pkt[0] = (reg) & 0xff; /* reg addr */
 	pkt[1] = (reg >> 8) & 0xff;
-	memcpy((u8 *)&pkt[2], values, length);
+	memcpy(&pkt[2], values, length);
 
-	if (info->debug_string) {
-		int i;
-		pr_info("[sec_input] zinitix: %s: W:", __func__);
-		for (i = 0; i < length + 2; i++) {
-			pr_cont(" %02X", pkt[i]);
-		}
-		pr_cont("\n");
-	}
 retry:
-	ret = i2c_master_send(client, pkt, length + 2);
+	ret = i2c_master_send(client, pkt, length + ZINITIX_REG_ADDR_LENGTH);
 	if (ret < 0) {
 		usleep_range(1 * 1000, 1 * 1000);
 
@@ -968,9 +1023,19 @@ retry:
 		kfree(pkt);
 		return ret;
 	}
+	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
+
+	if (info->debug_flag & ZINITIX_TS_DEBUG_PRINT_I2C_WRITE_CMD) {
+		int i;
+		pr_info("[sec_input] zinitix: %s: W:", __func__);
+		for (i = 0; i < length + ZINITIX_REG_ADDR_LENGTH; i++) {
+			pr_cont(" %02X", pkt[i]);
+		}
+		pr_cont("\n");
+	}
 
 	kfree(pkt);
-	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
+
 	return length;
 }
 
@@ -987,6 +1052,12 @@ static inline s32 write_cmd(struct i2c_client *client, u16 reg)
 	struct zt75xx_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
 	int count = 0;
+	u8 *pkt = NULL;
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		return -ENODEV;
+	}
 
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
@@ -1002,9 +1073,15 @@ static inline s32 write_cmd(struct i2c_client *client, u16 reg)
 		return -EBUSY;
 	}
 #endif
+	pkt = kzalloc(ZINITIX_REG_ADDR_LENGTH, GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+
+	pkt[0] = (reg) & 0xff; /* reg addr */
+	pkt[1] = (reg >> 8) & 0xff;
 
 retry:
-	ret = i2c_master_send(client, (u8 *)&reg, 2);
+	ret = i2c_master_send(client, pkt, ZINITIX_REG_ADDR_LENGTH);
 	if (ret < 0) {
 		usleep_range(1 * 1000, 1 * 1000);
 
@@ -1012,13 +1089,15 @@ retry:
 			goto retry;
 
 		info->comm_err_count++;
+		kfree(pkt);
 		return ret;
 	}
 	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
 
-	if (info->debug_string)
-		pr_info("[sec_input] zinitix: %s: W: %X", __func__, reg);
+	if (info->debug_flag & ZINITIX_TS_DEBUG_PRINT_I2C_WRITE_CMD)
+		pr_info("[sec_input] zinitix: %s: W: %04X", __func__, reg);
 
+	kfree(pkt);
 	return I2C_SUCCESS;
 }
 
@@ -1028,6 +1107,13 @@ static inline s32 read_raw_data(struct i2c_client *client,
 	struct zt75xx_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
 	int count = 0;
+	u8 *pkt = NULL;
+	u8 *data = NULL;
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		return -ENODEV;
+	}
 
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
@@ -1043,10 +1129,22 @@ static inline s32 read_raw_data(struct i2c_client *client,
 		return -EBUSY;
 	}
 #endif
+	pkt = kzalloc(ZINITIX_REG_ADDR_LENGTH, GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+
+	pkt[0] = (reg) & 0xff; /* reg addr */
+	pkt[1] = (reg >> 8) & 0xff;
+
+	data = kzalloc(length, GFP_KERNEL);
+	if (!data) {
+		kfree(pkt);
+		return -ENOMEM;
+	}
 
 retry:
 	/* select register */
-	ret = i2c_master_send(client, (u8 *)&reg, 2);
+	ret = i2c_master_send(client, pkt, ZINITIX_REG_ADDR_LENGTH);
 	if (ret < 0) {
 		usleep_range(1 * 1000, 1 * 1000);
 
@@ -1054,19 +1152,37 @@ retry:
 			goto retry;
 
 		info->comm_err_count++;
+		kfree(pkt);
+		kfree(data);
 		return ret;
 	}
 
 	/* for setup tx transaction. */
 	usleep_range(200, 200);
 
-	ret = i2c_master_recv(client, values, length);
+	ret = i2c_master_recv(client, data, length);
 	if (ret < 0) {
 		info->comm_err_count++;
+		kfree(pkt);
+		kfree(data);
 		return ret;
 	}
 
+	memcpy(values, data, length);
+
 	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
+	kfree(pkt);
+	kfree(data);
+
+	if (info->debug_flag & ZINITIX_TS_DEBUG_PRINT_I2C_READ_CMD) {
+		int i;
+		pr_info("[sec_input] zinitix: %s: W: %04X R:", __func__, reg);
+		for (i = 0; i < length; i++) {
+			pr_cont(" %02X", values[i]);
+		}
+		pr_cont("\n");
+	}
+
 	return length;
 }
 
@@ -1075,6 +1191,13 @@ static inline s32 read_firmware_data(struct i2c_client *client,
 {
 	struct zt75xx_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
+	u8 *pkt = NULL;
+	u8 *data = NULL;
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		return -ENODEV;
+	}
 
 #ifdef CONFIG_TRUSTONIC_TRUSTED_UI
 	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
@@ -1090,23 +1213,52 @@ static inline s32 read_firmware_data(struct i2c_client *client,
 		return -EBUSY;
 	}
 #endif
+	pkt = kzalloc(ZINITIX_REG_ADDR_LENGTH, GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+
+	pkt[0] = (addr) & 0xff; /* reg addr */
+	pkt[1] = (addr >> 8) & 0xff;
+
+	data = kzalloc(length, GFP_KERNEL);
+	if (!data) {
+		kfree(pkt);
+		return -ENOMEM;
+	}
 
 	/* select register*/
-	ret = i2c_master_send(client, (u8 *)&addr, 2);
+	ret = i2c_master_send(client, pkt, ZINITIX_REG_ADDR_LENGTH);
 	if (ret < 0) {
 		info->comm_err_count++;
+		kfree(pkt);
+		kfree(data);
 		return ret;
 	}
 
 	/* for setup tx transaction. */
 	usleep_range(1 * 1000, 1 * 1000);
 
-	ret = i2c_master_recv(client, values, length);
+	ret = i2c_master_recv(client, data, length);
 	if (ret < 0) {
 		info->comm_err_count++;
+		kfree(pkt);
+		kfree(data);
 		return ret;
 	}
 	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
+	memcpy(values, data, length);
+
+	kfree(pkt);
+	kfree(data);
+
+	if (info->debug_flag & ZINITIX_TS_DEBUG_PRINT_I2C_READ_CMD) {
+		int i;
+		pr_info("[sec_input] zinitix: %s: W: %04X R:", __func__, addr);
+		for (i = 0; i < length; i++) {
+			pr_cont(" %02X", values[i]);
+		}
+		pr_cont("\n");
+	}
 
 	return length;
 }
@@ -1134,46 +1286,6 @@ static irqreturn_t secure_filter_interrupt(struct zt75xx_ts_info *info)
 	}
 
 	return IRQ_NONE;
-}
-
-static int secure_touch_clk_prepare_enable(struct zt75xx_ts_info *info)
-{
-	int ret;
-
-	if (!info->core_clk || !info->iface_clk) {
-		input_err(true, &info->client->dev, "%s: error clk\n", __func__);
-		return -ENODEV;
-	}
-
-	ret = clk_prepare_enable(info->core_clk);
-	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: failed core clk\n", __func__);
-		goto err_core_clk;
-	}
-
-	ret = clk_prepare_enable(info->iface_clk);
-	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: failed iface clk\n", __func__);
-		goto err_iface_clk;
-	}
-
-	return 0;
-
-err_iface_clk:
-	clk_disable_unprepare(info->core_clk);
-err_core_clk:
-	return -ENODEV;
-}
-
-static void secure_touch_clk_unprepare_disable(struct zt75xx_ts_info *info)
-{
-	if (!info->core_clk || !info->iface_clk) {
-		input_err(true, &info->client->dev, "%s: error clk\n", __func__);
-		return;
-	}
-
-	clk_disable_unprepare(info->core_clk);
-	clk_disable_unprepare(info->iface_clk);
 }
 
 /**
@@ -1241,18 +1353,6 @@ static ssize_t secure_touch_enable_store(struct device *dev,
 			return -EIO;
 		}
 
-		if (secure_touch_clk_prepare_enable(info) < 0) {
-			pm_runtime_put(info->client->adapter->dev.parent);
-			enable_irq(info->client->irq);
-#if ESD_TIMER_INTERVAL
-			esd_timer_start(CHECK_ESD_TIMER, info);
-			write_reg(info->client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, SCAN_RATE_HZ * ESD_TIMER_INTERVAL);
-#endif
-			input_err(true, &info->client->dev, "%s: failed to clk enable\n", __func__);
-			up(&info->work_lock);
-			return -ENXIO;
-		}
-
 		reinit_completion(&info->secure_powerdown);
 		reinit_completion(&info->secure_interrupt);
 
@@ -1273,7 +1373,6 @@ static ssize_t secure_touch_enable_store(struct device *dev,
 			return count;
 		}
 
-		secure_touch_clk_unprepare_disable(info);
 		pm_runtime_put_sync(info->client->adapter->dev.parent);
 		atomic_set(&info->secure_enabled, 0);
 		sysfs_notify(&info->input_dev->dev.kobj, NULL, "secure_touch");
@@ -1344,45 +1443,12 @@ static struct attribute_group secure_attr_group = {
 	.attrs = secure_attr,
 };
 
-static int secure_touch_init(struct zt75xx_ts_info *info)
+static void secure_touch_init(struct zt75xx_ts_info *info)
 {
 	input_info(true, &info->client->dev, "%s\n", __func__);
 
 	init_completion(&info->secure_powerdown);
 	init_completion(&info->secure_interrupt);
-
-	info->core_clk = clk_get(&info->client->adapter->dev, "core_clk");
-	if (IS_ERR_OR_NULL(info->core_clk)) {
-		input_err(true, &info->client->dev, "%s: failed to get core_clk: %ld\n",
-				__func__, PTR_ERR(info->core_clk));
-		goto err_core_clk;
-	}
-
-	info->iface_clk = clk_get(&info->client->adapter->dev, "iface_clk");
-	if (IS_ERR_OR_NULL(info->iface_clk)) {
-		input_err(true, &info->client->dev, "%s: failed to get iface_clk: %ld\n",
-				__func__, PTR_ERR(info->iface_clk));
-		goto err_iface_clk;
-	}
-
-	return 0;
-
-err_iface_clk:
-	clk_put(info->core_clk);
-err_core_clk:
-	info->core_clk = NULL;
-	info->iface_clk = NULL;
-
-	return -ENODEV;
-}
-
-static void secure_touch_remove(struct zt75xx_ts_info *info)
-{
-	if (!IS_ERR_OR_NULL(info->core_clk))
-		clk_put(info->core_clk);
-
-	if (!IS_ERR_OR_NULL(info->iface_clk))
-		clk_put(info->iface_clk);
 }
 
 static void secure_touch_stop(struct zt75xx_ts_info *info, bool stop)
@@ -1404,9 +1470,14 @@ static void secure_touch_stop(struct zt75xx_ts_info *info, bool stop)
 static int  zt75xx_ts_open(struct input_dev *dev);
 static void zt75xx_ts_close(struct input_dev *dev);
 #endif
+static int zt75xx_ts_set_lowpowermode(struct zt75xx_ts_info *info, u8 mode);
 
 static bool zt75xx_power_control(struct zt75xx_ts_info *info, u8 ctl);
 static int zt75xx_pinctrl_configure(struct zt75xx_ts_info *info, bool active);
+
+#ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
+static void zinitix_chk_tsp_ic_status(struct zt75xx_ts_info *info, int call_pos);
+#endif
 
 static bool init_touch(struct zt75xx_ts_info *info);
 static bool mini_init_touch(struct zt75xx_ts_info *info);
@@ -1520,13 +1591,14 @@ static void zt75xx_set_optional_mode(struct zt75xx_ts_info *info, bool force)
 }
 
 #ifdef SEC_FACTORY_TEST
-static bool get_raw_data(struct zt75xx_ts_info *info, u8 *buff, int skip_cnt)
+static int get_raw_data(struct zt75xx_ts_info *info, u8 *buff, int skip_cnt)
 {
 	struct i2c_client *client = info->client;
 	struct zt75xx_ts_platform_data *pdata = info->pdata;
 	u32 total_node = info->cap_info.total_node_num;
 	u32 sz;
 	int i, j = 0;
+	int retry_cnt;
 
 	disable_irq(info->irq);
 
@@ -1536,17 +1608,23 @@ static bool get_raw_data(struct zt75xx_ts_info *info, u8 *buff, int skip_cnt)
 			__func__, info->work_state);
 		enable_irq(info->irq);
 		up(&info->work_lock);
-		return false;
+		return -1;
 	}
 
 	info->work_state = RAW_DATA;
 
+	if (info->touch_mode == TOUCH_POINT_MODE)
+		retry_cnt = 30;
+	else
+		retry_cnt = 150;
+
 	for (i = 0; i < skip_cnt; i++) {
+		j = 0;
 		while (gpio_get_value(pdata->gpio_int)) {
-			usleep_range(1 * 1000, 1 * 1000);
-			if (++j > 3000) {
+			usleep_range(7 * 1000, 7 * 1000);
+			if (++j > retry_cnt) {
 				input_err(true, &info->client->dev, "%s: (skip_cnt) wait int timeout\n", __func__);
-				break;
+				goto error_out;
 			}
 		}
 
@@ -1562,19 +1640,16 @@ static bool get_raw_data(struct zt75xx_ts_info *info, u8 *buff, int skip_cnt)
 
 	j = 0;
 	while (gpio_get_value(pdata->gpio_int)) {
-		usleep_range(1 * 1000, 1 * 1000);
-		if (++j > 3000) {
+		usleep_range(7 * 1000, 7 * 1000);
+		if (++j > retry_cnt) {
 			input_err(true, &info->client->dev, "%s: wait int timeout\n", __func__);
-			break;
+			goto error_out;
 		}
 	}
 
 	if (read_raw_data(client, ZT75XX_RAWDATA_REG, (char *)buff, sz) < 0) {
 		input_err(true, &info->client->dev, "%s: error read zinitix tc raw data\n", __func__);
-		info->work_state = NOTHING;
-		enable_irq(info->irq);
-		up(&info->work_lock);
-		return false;
+		goto error_out;
 	}
 
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
@@ -1582,7 +1657,15 @@ static bool get_raw_data(struct zt75xx_ts_info *info, u8 *buff, int skip_cnt)
 	enable_irq(info->irq);
 	up(&info->work_lock);
 
-	return true;
+	return 0;
+
+error_out:
+	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
+	info->work_state = NOTHING;
+	enable_irq(info->irq);
+	up(&info->work_lock);
+
+	return -1;
 }
 #endif
 
@@ -1697,12 +1780,12 @@ static bool ts_read_coord(struct zt75xx_ts_info *info)
 
 	/* LPM mode : Spay, AOT */
 	if (info->pdata->support_lpm_mode && (zinitix_bit_test(info->touch_info.status, BIT_GESTURE))) {
-		if (read_data(info->client, ZT75XX_LPM_MODE_REG, (u8 *)&lpm_mode_reg, 2) < 0)
+		if (read_data(info->client, ZT75XX_LPM_MODE_REG, (u8 *)&info->lpm_mode_reg, 2) < 0)
 			input_err(true, &client->dev, "%s: lpm_mode_reg read fail\n", __func__);
 		input_info(true, &client->dev, "%s: lpm_mode_reg read 0x%02x%02x\n",
-			__func__, lpm_mode_reg.data, lpm_mode_reg.flag);
+			__func__, info->lpm_mode_reg.data, info->lpm_mode_reg.flag);
 
-		if (zinitix_bit_test(lpm_mode_reg.data, BIT_EVENT_SPAY)) {
+		if (zinitix_bit_test(info->lpm_mode_reg.data, BIT_EVENT_SPAY)) {
 			input_info(true, &client->dev, "%s: Spay Gesture\n", __func__);
 
 			info->scrub_id = SPONGE_EVENT_TYPE_SPAY;
@@ -1713,7 +1796,7 @@ static bool ts_read_coord(struct zt75xx_ts_info *info)
 			input_sync(info->input_dev);
 			input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 0);
 			input_sync(info->input_dev);
-		} else if (zinitix_bit_test(lpm_mode_reg.data, BIT_EVENT_AOD)) {
+		} else if (zinitix_bit_test(info->lpm_mode_reg.data, BIT_EVENT_AOD)) {
 			input_info(true, &client->dev, "%s: AOD Doubletab\n", __func__);
 
 			info->scrub_id = SPONGE_EVENT_TYPE_AOD_DOUBLETAB;
@@ -1726,12 +1809,12 @@ static bool ts_read_coord(struct zt75xx_ts_info *info)
 			input_sync(info->input_dev);
 			input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 0);
 			input_sync(info->input_dev);
-		} else if (zinitix_bit_test(lpm_mode_reg.data, BIT_EVENT_AOT)) {
+		} else if (zinitix_bit_test(info->lpm_mode_reg.data, BIT_EVENT_AOT)) {
 			input_info(true, &client->dev, "%s: AOT Doubletab\n", __func__);
 
-			input_report_key(info->input_dev, KEY_HOMEPAGE, 1);
+			input_report_key(info->input_dev, KEY_WAKEUP, 1);
 			input_sync(info->input_dev);
-			input_report_key(info->input_dev, KEY_HOMEPAGE, 0);
+			input_report_key(info->input_dev, KEY_WAKEUP, 0);
 			input_sync(info->input_dev);
 		}
 	}
@@ -1782,8 +1865,8 @@ static void esd_timer_start(u16 sec, struct zt75xx_ts_info *info)
 {
 	unsigned long flags;
 
-	if (info->sleep_mode) {
-		input_info(true, &info->client->dev, "%s: skip (sleep_mode)!\n", __func__);
+	if (info->power_state < POWER_STATE_ON) {
+		input_info(true, &info->client->dev, "%s: skip\n", __func__);
 		return;
 	}
 
@@ -1838,6 +1921,7 @@ static void ts_tmr_work(struct work_struct *work)
 {
 	struct zt75xx_ts_info *info = container_of(work, struct zt75xx_ts_info, tmr_work);
 	struct i2c_client *client = info->client;
+	u8 prev_power_state;
 
 #if defined(TSP_VERBOSE_DEBUG)
 	input_info(true, &client->dev, "%s: tmr queue work ++\n", __func__);
@@ -1867,6 +1951,7 @@ static void ts_tmr_work(struct work_struct *work)
 #endif
 
 	info->work_state = ESD_TIMER;
+	prev_power_state = info->power_state;
 
 	disable_irq(info->irq);
 	zt75xx_power_control(info, POWER_OFF);
@@ -1879,6 +1964,10 @@ static void ts_tmr_work(struct work_struct *work)
 	info->work_state = NOTHING;
 	enable_irq(info->irq);
 	up(&info->work_lock);
+
+	if (prev_power_state == POWER_STATE_LPM)
+		zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+
 #if defined(TSP_VERBOSE_DEBUG)
 	input_info(true, &client->dev, "%s: tmr queue work--\n", __func__);
 #endif
@@ -1891,6 +1980,9 @@ fail_time_out_init:
 	info->work_state = NOTHING;
 	enable_irq(info->irq);
 	up(&info->work_lock);
+
+	if (prev_power_state == POWER_STATE_LPM)
+		zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
 
 	return;
 }
@@ -1989,9 +2081,8 @@ static bool zt75xx_power_control(struct zt75xx_ts_info *info, u8 ctl)
 		msleep(CHIP_OFF_DELAY);
 	} else if (ctl == POWER_ON) {
 		msleep(CHIP_ON_DELAY);
+		write_reg(client, 0x0A, 0x0A);
 	}
-
-	write_reg(client, 0x0A, 0x0A);
 
 	return true;
 }
@@ -2014,13 +2105,35 @@ static void zt75xx_set_ta_status(struct zt75xx_ts_info *info)
 
 static int zt75xx_fix_active_mode(struct zt75xx_ts_info *info, bool active)
 {
+	u16 temp_power_state;
+	u8 ret_cnt = 0;
+
 	input_info(true, &info->client->dev, "%s: %s\n", __func__, active ? "fix" : "release");
 
-	if (write_reg(info->client, 0x0A, 0x0A) != I2C_SUCCESS)
-		return I2C_FAIL;
+retry:
+	write_reg(info->client, 0x0A, 0x0A);
 
-	if (write_reg(info->client, ZT75XX_POWER_STATE_FLAG, !!active) != I2C_SUCCESS)
-		return I2C_FAIL;
+	write_reg(info->client, ZT75XX_POWER_STATE_FLAG, active);
+
+	write_reg(info->client, 0x0A, 0x0A);
+
+	temp_power_state = 0xFFFF;
+	read_data(info->client, ZT75XX_POWER_STATE_FLAG, (u8 *)&temp_power_state, 2);
+
+	if (temp_power_state != active) {
+		input_err(true, &info->client->dev, "%s: fail write 0x%x register = %d\n",
+			__func__, ZT75XX_POWER_STATE_FLAG, temp_power_state);
+		if (ret_cnt < 3) {
+			ret_cnt++;
+			goto retry;
+		} else {
+			input_err(true, &info->client->dev, "%s: fail write 0x%x register\n",
+				__func__, ZT75XX_POWER_STATE_FLAG);
+			return I2C_FAIL;
+		}
+	}
+
+	usleep_range(5 * 1000, 5 * 1000);
 
 	return I2C_SUCCESS;
 }
@@ -2048,7 +2161,7 @@ int tsp_vbus_notification(struct notifier_block *nb,
 	}
 
 #ifdef CONFIG_INPUT_SEC_SECURE_TOUCH
-	if (atomic_read(&misc_info->secure_enabled)) {
+	if (atomic_read(&info->secure_enabled)) {
 		input_info(true, &info->client->dev,
 			"%s: ignored, because secure mode, old:%d, TA:%d\n",
 			__func__, old_ta_status, g_ta_connected);
@@ -2073,7 +2186,7 @@ static void zt75xx_charger_status_cb(struct tsp_callbacks *cb, bool ta_status)
 		g_ta_connected = true;
 
 #ifdef CONFIG_INPUT_SEC_SECURE_TOUCH
-	if (atomic_read(&misc_info->secure_enabled)) {
+	if (atomic_read(&info->secure_enabled)) {
 		input_info(true, &info->client->dev,
 			"%s: ignored, because secure mode, old:%d, TA:%d\n",
 			__func__, old_ta_status, g_ta_connected);
@@ -2994,11 +3107,23 @@ static bool mini_init_touch(struct zt75xx_ts_info *info)
 		goto fail_mini_init;
 	}
 	/* initialize */
+/* only bloom model: x channel, y channel is swapped in hardware
+ * set IC X resolution to dt y_resolution
+ * set IC Y resolution to dt x_resolution
+ * need to remove it next models.
+ */
+/*
 	if (write_reg(info->client, ZT75XX_X_RESOLUTION, (u16)pdata->x_resolution + ABS_PT_OFFSET) != I2C_SUCCESS)
 		input_info(true, &info->client->dev, "%s: failed set x resolution\n", __func__);
 
 	if (write_reg(info->client, ZT75XX_Y_RESOLUTION, (u16)pdata->y_resolution + ABS_PT_OFFSET) != I2C_SUCCESS)
 		input_info(true, &info->client->dev, "%s: failed set y resolution\n", __func__);
+*/
+	if (write_reg(info->client, ZT75XX_X_RESOLUTION, (u16)pdata->y_resolution + ABS_PT_OFFSET) != I2C_SUCCESS)
+		input_info(true, &info->client->dev, "%s: failed set y resolution\n", __func__);
+
+	if (write_reg(info->client, ZT75XX_Y_RESOLUTION, (u16)pdata->x_resolution + ABS_PT_OFFSET) != I2C_SUCCESS)
+		input_info(true, &info->client->dev, "%s: failed set x resolution\n", __func__);
 
 	if (write_reg(client, ZT75XX_TOUCH_MODE, info->touch_mode) != I2C_SUCCESS)
 		goto fail_mini_init;
@@ -3043,17 +3168,6 @@ static bool mini_init_touch(struct zt75xx_ts_info *info)
 			write_reg(info->client, ZT75XX_SET_AOD_H_REG, 0);
 			write_reg(info->client, ZT75XX_SET_AOD_X_REG, 0);
 			write_reg(info->client, ZT75XX_SET_AOD_Y_REG, 0);
-		}
-	}
-
-	if ((pdata->support_lpm_mode) &&
-			(info->spay_enable || info->aod_enable || info->aot_enable)) {
-		if (info->sleep_mode) {
-#if ESD_TIMER_INTERVAL
-			esd_timer_stop(info);
-#endif
-			write_cmd(info->client, ZT75XX_SLEEP_CMD);
-			input_info(true, &info->client->dev, "%s: sleep mode\n", __func__);
 		}
 	}
 
@@ -3163,7 +3277,7 @@ static void zt75xx_print_info(struct zt75xx_ts_info *info)
 	input_info(true, &info->client->dev,
 			"mode:%02X iq:%d depth:%d lp:%x // v:%X%X%02X cal:%02X,C%02XT%04X.%4s%s // #%d %d\n",
 			info->touch_info.fw_status, gpio_get_value(info->pdata->gpio_int),
-			desc->depth, lpm_mode_reg.flag,
+			desc->depth, info->lowpower_mode,
 			info->cap_info.fw_version, info->cap_info.fw_minor_version, info->cap_info.reg_data_version,
 			info->test_result.data[0],
 			info->tdata->nvdata.cal_count, info->tdata->nvdata.tune_fix_ver,
@@ -3174,7 +3288,7 @@ static void zt75xx_print_info(struct zt75xx_ts_info *info)
 	input_info(true, &info->client->dev,
 			"mode:%02X iq:%d depth:%d lp:%x // v:%X%X%02X // #%d %d\n",
 			info->touch_info.fw_status, gpio_get_value(info->pdata->gpio_int),
-			desc->depth, lpm_mode_reg.flag,
+			desc->depth, info->lowpower_mode,
 			info->cap_info.fw_version, info->cap_info.fw_minor_version, info->cap_info.reg_data_version,
 			info->print_info_cnt_open, info->print_info_cnt_release);
 #endif
@@ -3222,6 +3336,7 @@ static irqreturn_t zt75xx_touch_work(int irq, void *data)
 #endif
 	u16 ic_status;
 	char location[7] = "";
+	u8 err_reset = 0, prev_power_state;
 
 #ifdef CONFIG_INPUT_SEC_SECURE_TOUCH
 	if (IRQ_HANDLED == secure_filter_interrupt(info)) {
@@ -3235,7 +3350,7 @@ static irqreturn_t zt75xx_touch_work(int irq, void *data)
 	}
 #endif
 
-	if ((info->pdata->support_lpm_mode) && (info->sleep_mode)) {
+	if (info->power_state == POWER_STATE_LPM) {
 		int ret;
 
 		/* run lpm interrupt handler */
@@ -3251,7 +3366,7 @@ static irqreturn_t zt75xx_touch_work(int irq, void *data)
 			return IRQ_HANDLED;
 		}
 
-		input_info(true, &info->client->dev, "%s: run LPM interrupt handler, %d\n", __func__, ret);
+		input_info(true, &info->client->dev, "%s: run LPM interrupt handler, %d\n", __func__, jiffies_to_msecs(ret));
 	}
 
 	if (gpio_get_value(info->pdata->gpio_int)) {
@@ -3292,6 +3407,7 @@ static irqreturn_t zt75xx_touch_work(int irq, void *data)
 	}
 
 	info->work_state = NORMAL;
+	prev_power_state = info->power_state;
 
 	if (ts_read_coord(info) == false) { /* maybe desirable reset */
 		read_data(client, ZT75XX_DEBUG_REG, (u8 *)&ic_status, 2);
@@ -3301,6 +3417,7 @@ static irqreturn_t zt75xx_touch_work(int irq, void *data)
 
 		clear_report_data(info);
 		mini_init_touch(info);
+		err_reset = 1;
 
 		goto out;
 	}
@@ -3539,6 +3656,9 @@ out:
 
 	up(&info->work_lock);
 
+	if (err_reset && prev_power_state == POWER_STATE_LPM)
+		zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+
 	return IRQ_HANDLED;
 }
 
@@ -3546,9 +3666,10 @@ static int zt75xx_ts_set_lowpowermode(struct zt75xx_ts_info *info, u8 mode)
 {
 	u8 prev_work_state;
 	int i;
+	int retval;
 
 	input_info(true, &info->client->dev, "%s: %s(%02X)\n", __func__,
-			mode == TO_LOWPOWER_MODE ? "ENTER" : "EXIT", lpm_mode_reg.flag);
+			mode == TO_LOWPOWER_MODE ? "ENTER" : "EXIT", info->lowpower_mode);
 
 	down(&info->work_lock);
 	prev_work_state = info->work_state;
@@ -3556,10 +3677,15 @@ static int zt75xx_ts_set_lowpowermode(struct zt75xx_ts_info *info, u8 mode)
 	if (mode == TO_TOUCH_MODE) {
 		info->work_state = SLEEP_MODE_OUT;
 
-		write_reg(info->client, 0x0A, 0x0A);
+		for (i = 0; i < 5; i++) {
+			write_reg(info->client, 0x0A, 0x0A);
 
-		write_cmd(info->client, ZT75XX_WAKEUP_CMD);
-		info->sleep_mode = 0;
+			retval = write_cmd(info->client, ZT75XX_WAKEUP_CMD);
+			if (retval == I2C_SUCCESS)
+				break;
+			else
+				input_err(true, &info->client->dev, "%s: mode set failed, %d\n", __func__, i);
+		}
 
 		zt75xx_set_optional_mode(info, false);
 
@@ -3577,13 +3703,17 @@ static int zt75xx_ts_set_lowpowermode(struct zt75xx_ts_info *info, u8 mode)
 		esd_timer_stop(info);
 #endif
 
-		write_reg(info->client, 0x0A, 0x0A);
+		for (i = 0; i < 5; i++) {
+			write_reg(info->client, 0x0A, 0x0A);
 
-		if (write_reg(info->client, ZT75XX_LPM_MODE_REG, lpm_mode_reg.flag) != I2C_SUCCESS)
-			input_err(true, &info->client->dev, "%s: fail lpm mode set\n", __func__);
+			retval = write_reg(info->client, ZT75XX_LPM_MODE_REG, info->lowpower_mode);
+			if (retval == I2C_SUCCESS)
+				break;
+			else
+				input_err(true, &info->client->dev, "%s: mode set failed, %d\n", __func__, i);
+		}
 
 		write_cmd(info->client, ZT75XX_SLEEP_CMD);
-		info->sleep_mode = 1;
 
 		/* clear garbage data */
 		for (i = 0; i < 2; i++) {
@@ -3607,7 +3737,7 @@ static int zt75xx_ts_set_lowpowermode(struct zt75xx_ts_info *info, u8 mode)
 
 static int zt75xx_ts_start(struct zt75xx_ts_info *info)
 {
-	if (info->tsp_pwr_enabled != POWER_OFF) {
+	if (info->power_state == POWER_STATE_ON) {
 		input_err(true, &info->client->dev, "%s: already power on\n", __func__);
 		return 0;
 	}
@@ -3634,8 +3764,6 @@ static int zt75xx_ts_start(struct zt75xx_ts_info *info)
 	if (g_ta_connected)
 		zt75xx_set_ta_status(info);
 
-	info->power_state = POWER_STATE_ON;
-
 	up(&info->work_lock);
 
 	return 0;
@@ -3645,8 +3773,6 @@ fail:
 	enable_irq(info->irq);
 	info->work_state = NOTHING;
 
-	info->power_state = POWER_STATE_ON;
-
 	up(&info->work_lock);
 
 	return 0;
@@ -3654,7 +3780,7 @@ fail:
 
 static int zt75xx_ts_stop(struct zt75xx_ts_info *info)
 {
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: already power off\n", __func__);
 		return 0;
 	}
@@ -3669,7 +3795,6 @@ static int zt75xx_ts_stop(struct zt75xx_ts_info *info)
 		return 0;
 	}
 
-	info->sleep_mode = 0;
 	info->work_state = EALRY_SUSPEND;
 
 	clear_report_data(info);
@@ -3679,8 +3804,7 @@ static int zt75xx_ts_stop(struct zt75xx_ts_info *info)
 	esd_timer_stop(info);
 #endif
 	zt75xx_power_control(info, POWER_OFF);
-	
-	info->power_state = POWER_STATE_OFF;
+
 	up(&info->work_lock);
 
 	return 0;
@@ -3718,17 +3842,22 @@ static int zt75xx_ts_open(struct input_dev *dev)
 
 	input_info(true, &info->client->dev, "%s: %d\n", __func__, __LINE__);
 
-	if (info->power_state == POWER_STATE_OFF) {
-		input_info(true, &info->client->dev, "%s: power on device\n", __func__);
-		zt75xx_ts_start(info);
-		goto open_out;
-	}
-	if ((info->pdata->support_lpm_mode) && (info->sleep_mode)) {
+#ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
+	zinitix_chk_tsp_ic_status(info, ZINITIX_STATE_CHK_POS_OPEN);
+	cancel_delayed_work_sync(&info->switching_work);
+	mutex_lock(&info->switching_mutex);
+#endif
+
+	if (info->power_state == POWER_STATE_LPM) {
 		zt75xx_ts_set_lowpowermode(info, TO_TOUCH_MODE);
 	} else {
 		zt75xx_ts_start(info);
 	}
-open_out:
+
+#ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
+	mutex_unlock(&info->switching_mutex);
+#endif
+
 	info->print_info_cnt_open = 0;
 	info->print_info_cnt_release = 0;
 	schedule_work(&info->work_print_info.work);
@@ -3765,8 +3894,7 @@ static void zt75xx_ts_close(struct input_dev *dev)
 	secure_touch_stop(info, 1);
 #endif
 
-	input_info(true, &info->client->dev, "%s, spay:%d aod:%d aot:%d prox:%d\n",
-				__func__, info->spay_enable, info->aod_enable, info->aot_enable, info->prox_power_off);
+	input_info(true, &info->client->dev, "%s, prox:%d\n", __func__, info->prox_power_off);
 
 #ifdef TCLM_CONCEPT
 	sec_tclm_debug_info(info->tdata);
@@ -3778,22 +3906,44 @@ static void zt75xx_ts_close(struct input_dev *dev)
 	cancel_delayed_work(&info->work_print_info);
 	zt75xx_print_info(info);
 
-	if (info->power_state == POWER_STATE_OFF) {
-		input_info(true, &info->client->dev, "%s: already power off\n", __func__);
-		goto close_out;
-	}
+#ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
+	cancel_delayed_work_sync(&info->switching_work);
+	mutex_lock(&info->switching_mutex);
+#endif
 
-	if ((info->pdata->support_lpm_mode) &&
-			(info->spay_enable ||info->aod_enable || info->aot_enable) &&
-			(!info->prox_power_off)) {
-		zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+	if (!info->pdata->support_hall_ic) {
+		if (info->power_state == POWER_STATE_OFF) {
+			input_info(true, &info->client->dev, "%s: already power off\n", __func__);
+			goto close_out;
+		}
+
+		if (info->main_tsp_status == SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_ON) {
+			input_info(true, &info->client->dev, "%s: main is on now, sub off\n", __func__);
+			zt75xx_ts_stop(info);
+			goto close_out;
+		}
+
+		if (info->pdata->support_lpm_mode && info->lowpower_mode &&
+				!info->prox_power_off) {
+			zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+		} else {
+			zt75xx_ts_stop(info);
+		}
 	} else {
-		zt75xx_ts_stop(info);
+		if (info->flip_status == ZINITIX_STATUS_FOLDING
+				&& (info->pdata->support_lpm_mode && info->lowpower_mode)
+				&& !info->prox_power_off) {
+			zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+		} else {
+			zt75xx_ts_stop(info);
+		}
 	}
-close_out:
-	info->prox_power_off = 0;
 
-	return;
+close_out:
+#ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
+	mutex_unlock(&info->switching_mutex);
+#endif
+	info->prox_power_off = 0;
 }
 #endif	/* CONFIG_INPUT_ENABLED */
 
@@ -3801,14 +3951,21 @@ static int zinitix_notifier_call(struct notifier_block *n, unsigned long data, v
 {
 	struct zt75xx_ts_info *info = container_of(n, struct zt75xx_ts_info, nb);
 
+	if (info->pdata->support_hall_ic)
+		return 0;
+
 	input_dbg(true, &info->client->dev, "%s: %d\n", __func__, data);
 
 	if (data == SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_ON) {
-		input_info(true, &info->client->dev, "%s: stop device\n", __func__);
+		info->main_tsp_status = data;
+		input_info(true, &info->client->dev, "%s: main_tsp open, stop device\n", __func__);
 		zt75xx_ts_stop(info);
+	} else if (data == SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_OFF) {
+		info->main_tsp_status = data;
+		input_info(true, &info->client->dev, "%s: main_tsp close\n", __func__);
 	}
 
-	return 0;	
+	return 0;
 }
 
 #if defined(SEC_FACTORY_TEST) || defined(USE_MISC_DEVICE)
@@ -4209,6 +4366,14 @@ static void fw_update(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(result, sizeof(result), "NG");
+		sec_cmd_set_cmd_result(sec, result, strnlen(result, sizeof(result)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	switch (sec->cmd_param[0]) {
 	case BUILT_IN:
 		if (!pdata->firmware_name) {
@@ -4360,6 +4525,14 @@ static void get_fw_ver_ic(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		snprintf(model, sizeof(model), "NG");
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		goto NG;
+	}
+
 	//wakeup cmd
 	write_reg(client, 0x0A, 0x0A);
 
@@ -4377,6 +4550,7 @@ static void get_fw_ver_ic(void *device_data)
 		input_err(true, &client->dev, "%s: version check error\n", __func__);
 		snprintf(buff, sizeof(buff), "ZI%08X", version);
 		snprintf(model, sizeof(model), "ZI%04X", version >> 16);
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
 		goto NG;
 	}
 
@@ -4401,13 +4575,14 @@ static void get_fw_ver_ic(void *device_data)
 	snprintf(buff + length, sizeof(buff) - length, "%08X", version);
 	snprintf(model, length + 1, "%s", (u8 *)&vendor_id);
 	snprintf(model + length, sizeof(model) - length, "%04X", version >> 16);
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+
 NG:
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 	if (sec->cmd_all_factory_state == SEC_CMD_STATUS_RUNNING) {
 		sec_cmd_set_cmd_result_all(sec, buff, strnlen(buff, sizeof(buff)), "FW_VER_IC");
 		sec_cmd_set_cmd_result_all(sec, model, strnlen(model, sizeof(model)), "FW_MODEL");
 	}
-	sec->cmd_state = SEC_CMD_STATUS_OK;
 
 	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, sec->cmd_result,
 				(int)strnlen(sec->cmd_result, sizeof(sec->cmd_result)));
@@ -4422,6 +4597,14 @@ static void get_checksum_data(void *device_data)
 	u16 checksum;
 
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(client, 0x0A, 0x0A);
 
@@ -4445,6 +4628,14 @@ static void get_threshold(void *device_data)
 	char buff[20] = { 0 };
 
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(client, 0x0A, 0x0A);
 
@@ -4549,6 +4740,14 @@ static void get_x_num(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 	read_data(client, ZT75XX_TOTAL_NUMBER_OF_X, (u8 *)&info->cap_info.x_node_num, 2);
@@ -4569,6 +4768,14 @@ static void get_y_num(void *device_data)
 	char buff[16] = { 0 };
 
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(client, 0x0A, 0x0A);
 
@@ -4601,6 +4808,26 @@ static void not_support_cmd(void *device_data)
 				(int)strnlen(sec->cmd_result, sizeof(sec->cmd_result)));
 }
 
+static void debug(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct zt75xx_ts_info *info = container_of(sec, struct zt75xx_ts_info, sec);
+	char buff[16] = { 0 };
+
+	sec_cmd_set_default_result(sec);
+
+	info->debug_flag = sec->cmd_param[0];
+
+	snprintf(buff, sizeof(buff), "%s", "OK");
+	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+
+	sec_cmd_set_cmd_exit(sec);
+
+	input_info(true, &info->client->dev, "%s: \"%s(%d)\"\n", __func__, sec->cmd_result,
+				(int)strnlen(sec->cmd_result, sizeof(sec->cmd_result)));
+}
+
 static void run_dnd_read(void *device_data)
 {
 	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
@@ -4612,6 +4839,16 @@ static void run_dnd_read(void *device_data)
 	s32 i, j;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -4619,14 +4856,17 @@ static void run_dnd_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	ret = ts_set_touchmode(TOUCH_DND_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->dnd_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->dnd_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	min = 0xFFFF;
@@ -4716,6 +4956,16 @@ static void run_dnd_read_all(void *device_data)
 	s32 i, j;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(info->client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -4723,14 +4973,22 @@ static void run_dnd_read_all(void *device_data)
 	write_reg(info->client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(info->client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
+
+	if (zt75xx_fix_active_mode(info, true) != I2C_SUCCESS) {
+		ret = -1;
+		goto out;
+	}
 
 	ret = ts_set_touchmode(TOUCH_DND_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->dnd_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->dnd_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	memset(all_cmdbuff, 0, sizeof(char) * (info->cap_info.x_node_num * info->cap_info.y_node_num * 6));	//size 6  ex(12000,)
@@ -4747,6 +5005,8 @@ static void run_dnd_read_all(void *device_data)
 	sec->cmd_state = SEC_CMD_STATUS_OK;
 
 out:
+	zt75xx_fix_active_mode(info, false);
+
 	if (ret < 0) {
 		snprintf(buff, sizeof(buff), "%s", "NG");
 		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -5127,6 +5387,16 @@ static void run_delta_read(void *device_data)
 	s32 i, j;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -5134,14 +5404,17 @@ static void run_delta_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	ret = ts_set_touchmode(TOUCH_HYBRID_BASELINED_DATA_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->delta_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->delta_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	min = (s16)0x7FFF;
@@ -5236,6 +5509,16 @@ static void run_hfdnd_read(void *device_data)
 	u16 min = 0xFFFF, max = 0x0000;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -5243,14 +5526,17 @@ static void run_hfdnd_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	ret = ts_set_touchmode(TOUCH_HFDND_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->hfdnd_data, 2);
+	ret = get_raw_data(info, (u8 *)raw_data->hfdnd_data, 2);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	input_info(true, &client->dev, "%s: start\n", __func__);
@@ -5574,6 +5860,17 @@ static void run_rxshort_read(void *device_data)
 	int y_num = info->cap_info.y_node_num;
 	int i, touchkey_node = 2;
 	u16 screen_max = 0x0000, touchkey_max = 0x0000;
+	int ret;
+
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(client, 0x0A, 0x0A);
 
@@ -5582,10 +5879,17 @@ static void run_rxshort_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
-	ts_set_touchmode3(TOUCH_RXSHORT_MODE);
-	get_raw_data(info, (u8 *)raw_data->rxshort_data, 2);
+	ret = ts_set_touchmode3(TOUCH_RXSHORT_MODE);
+	if (ret < 0) {
+		ts_set_touchmode3(TOUCH_POINT_MODE);
+		goto out;
+	}
+	ret = get_raw_data(info, (u8 *)raw_data->rxshort_data, 2);
+	if (ret < 0) {
+		ts_set_touchmode3(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode3(TOUCH_POINT_MODE);
 
 	input_info(true, &client->dev, "%s: start\n", __func__);
@@ -5604,6 +5908,13 @@ static void run_rxshort_read(void *device_data)
 	snprintf(buff, sizeof(buff), "%d,%d", screen_max, touchkey_max);
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 	sec->cmd_state = SEC_CMD_STATUS_OK;
+
+out:
+	if (ret < 0) {
+		snprintf(buff, sizeof(buff), "%s", "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+	}
 
 #if ESD_TIMER_INTERVAL
 	esd_timer_start(CHECK_ESD_TIMER, info);
@@ -5657,6 +5968,17 @@ static void run_txshort_read(void *device_data)
 	int x_num = info->cap_info.x_node_num;
 	int i;
 	u16 screen_max = 0x0000, touchkey_max = 0x0000;
+	int ret;
+
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(client, 0x0A, 0x0A);
 
@@ -5665,10 +5987,17 @@ static void run_txshort_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
-	ts_set_touchmode3(TOUCH_TXSHORT_MODE);
-	get_raw_data(info, (u8 *)raw_data->txshort_data, 2);
+	ret = ts_set_touchmode3(TOUCH_TXSHORT_MODE);
+	if (ret < 0) {
+		ts_set_touchmode3(TOUCH_POINT_MODE);
+		goto out;
+	}
+	ret = get_raw_data(info, (u8 *)raw_data->txshort_data, 2);
+	if (ret < 0) {
+		ts_set_touchmode3(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode3(TOUCH_POINT_MODE);
 
 	input_info(true, &client->dev, "%s: start\n", __func__);
@@ -5684,6 +6013,13 @@ static void run_txshort_read(void *device_data)
 	snprintf(buff, sizeof(buff), "%d,%d", screen_max, touchkey_max);
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 	sec->cmd_state = SEC_CMD_STATUS_OK;
+
+out:
+	if (ret < 0) {
+		snprintf(buff, sizeof(buff), "%s", "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+	}
 
 #if ESD_TIMER_INTERVAL
 	esd_timer_start(CHECK_ESD_TIMER, info);
@@ -5733,11 +6069,11 @@ static void get_txshort(void *device_data)
 #define TEST_SHORT					0x08
 #define TEST_PASS					0xFF
 
-static bool get_channel_test_result(struct zt75xx_ts_info *info, int skip_cnt)
+static int get_channel_test_result(struct zt75xx_ts_info *info, int skip_cnt)
 {
 	struct i2c_client *client = info->client;
-	int i;
-	int retry = 100;
+	int i, j = 0;
+	int retry_cnt = 150;
 
 	disable_irq(info->irq);
 
@@ -5747,14 +6083,20 @@ static bool get_channel_test_result(struct zt75xx_ts_info *info, int skip_cnt)
 				info->work_state);
 		enable_irq(info->irq);
 		up(&info->work_lock);
-		return false;
+		return -1;
 	}
 
 	info->work_state = RAW_DATA;
 
 	for(i = 0; i < skip_cnt; i++) {
-		while (gpio_get_value(info->pdata->gpio_int))
-			usleep_range(1 * 1000, 1 * 1000);
+		j = 0;
+		while (gpio_get_value(info->pdata->gpio_int)) {
+			usleep_range(7 * 1000, 7 * 1000);
+			if (++j > retry_cnt) {
+				input_err(true, &client->dev, "%s: (skip_cnt) wait int timeout\n", __func__);
+				goto error_out;
+			}
+		}
 
 		write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 		usleep_range(1 * 1000, 1 * 1000);
@@ -5764,40 +6106,61 @@ static bool get_channel_test_result(struct zt75xx_ts_info *info, int skip_cnt)
 
 	input_info(true, &client->dev, "%s: channel_test_result read\n", __func__);
 
+	j = 0;
 	while (gpio_get_value(info->pdata->gpio_int)) {
-		//		usleep_range(1 * 1000, 1 * 1000);
-		msleep(30);
-		if (--retry < 0)
-			break;
-		else
-			input_info(true, &client->dev, "%s: retry:%d\n", __func__, retry);
+		usleep_range(7 * 1000, 7 * 1000);
+		if (++j > retry_cnt) {
+			input_err(true, &client->dev, "%s: wait int timeout\n", __func__);
+			goto error_out;
+		}
 	}
 
-	read_data(info->client, REG_CHANNEL_TEST_RESULT, (u8 *)info->raw_data->channel_test_data, 10);
+	if (read_data(info->client, REG_CHANNEL_TEST_RESULT,
+			(u8 *)info->raw_data->channel_test_data, 10) < 0) {
+		input_err(true, &client->dev, "%s: failed to read data\n", __func__);
+		goto error_out;
+	}
 
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 	info->work_state = NOTHING;
 	enable_irq(info->irq);
 	up(&info->work_lock);
 
-	return true;
+	return 0;
+
+error_out:
+	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
+	info->work_state = NOTHING;
+	enable_irq(info->irq);
+	up(&info->work_lock);
+
+	return -1;
 }
 
-static void run_test_open_short(struct zt75xx_ts_info *info)
+static int run_test_open_short(struct zt75xx_ts_info *info)
 {
 	struct i2c_client *client = info->client;
 	struct tsp_raw_data *raw_data = info->raw_data;
+	int ret;
 
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
+	esd_timer_stop(info);
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
 
-	ts_set_touchmode(TOUCH_CHANNEL_TEST_MODE);
-	get_channel_test_result(info, 2);
+	ret = ts_set_touchmode(TOUCH_CHANNEL_TEST_MODE);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
+	ret = get_channel_test_result(info, 2);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	input_info(true, &client->dev, "channel_test_result : %04X\n", raw_data->channel_test_data[0]);
@@ -5816,11 +6179,14 @@ static void run_test_open_short(struct zt75xx_ts_info *info)
 			info->ito_test[3] |= 0x20;
 	}
 
+out:
 #if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
+	esd_timer_start(CHECK_ESD_TIMER, info);
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL,
 			SCAN_RATE_HZ * ESD_TIMER_INTERVAL);
 #endif
+
+	return ret;
 }
 
 static void check_trx_channel_test(struct zt75xx_ts_info *info, char *buf)
@@ -5859,10 +6225,12 @@ static void run_trx_short_test(void *device_data)
 	struct tsp_raw_data *raw_data = info->raw_data;
 	char buff[SEC_CMD_STR_LEN] = { 0 };
 	u8 temp[10];
+	int ret;
+	char test[32];
 
 	sec_cmd_set_default_result(sec);
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
 		snprintf(buff, sizeof(buff), "NG");
 		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -5870,11 +6238,22 @@ static void run_trx_short_test(void *device_data)
 		return;
 	}
 
+	snprintf(test, sizeof(test), "TEST=%d,%d", sec->cmd_param[0], sec->cmd_param[1]);
+
 	/*
 	 * run_test_open_short() need to be fix for separate by test item(open, short, pattern open)
 	 */
-	if (sec->cmd_param[0] == 1 && sec->cmd_param[1] == 1)
-		run_test_open_short(info);
+	if (sec->cmd_param[0] == 1 && sec->cmd_param[1] == 1) {
+		ret = run_test_open_short(info);
+		if (ret < 0) {
+			input_err(true, &info->client->dev, "%s: failed to get data\n", __func__);
+			snprintf(buff, sizeof(buff), "NG");
+			sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+			sec->cmd_state = SEC_CMD_STATUS_FAIL;
+			sec_cmd_send_event_to_user(sec, test, "RESULT=FAIL");
+			return;
+		}
+	}
 
 	if (sec->cmd_param[0] == 1 && sec->cmd_param[1] == 1) {
 		/* 1,1 : open  */
@@ -5906,6 +6285,7 @@ static void run_trx_short_test(void *device_data)
 		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 		sec->cmd_state = SEC_CMD_STATUS_NOT_APPLICABLE;
 
+		sec_cmd_send_event_to_user(sec, test, "RESULT=FAIL");
 		input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, sec->cmd_result,
 				(int)strlen(sec->cmd_result));
 		return;
@@ -5915,6 +6295,7 @@ static void run_trx_short_test(void *device_data)
 		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 		sec->cmd_state = SEC_CMD_STATUS_NOT_APPLICABLE;
 
+		sec_cmd_send_event_to_user(sec, test, "RESULT=FAIL");
 		input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, sec->cmd_result,
 				(int)strlen(sec->cmd_result));
 		return;
@@ -5923,6 +6304,8 @@ static void run_trx_short_test(void *device_data)
 		if (raw_data->channel_test_data[0] == TEST_PASS)
 			goto OK;
 	}
+
+	sec_cmd_send_event_to_user(sec, test, "RESULT=FAIL");
 
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 	sec->cmd_state = SEC_CMD_STATUS_FAIL;
@@ -5936,6 +6319,7 @@ OK:
 	snprintf(buff, sizeof(buff), "OK");
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
 	sec->cmd_state = SEC_CMD_STATUS_OK;
+	sec_cmd_send_event_to_user(sec, test, "RESULT=PASS");
 
 	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, sec->cmd_result,
 			(int)strlen(sec->cmd_result));
@@ -5954,6 +6338,16 @@ static void run_selfdnd_read(void *device_data)
 	s32 j;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -5961,14 +6355,17 @@ static void run_selfdnd_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	ret = ts_set_touchmode(TOUCH_SELF_DND_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->selfdnd_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->selfdnd_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	min = 0xFFFF;
@@ -6050,6 +6447,17 @@ static void run_selfdnd_read_all(void *device_data)
 	char *buff = NULL;
 	int total_node = info->cap_info.y_node_num;
 	s32 j;
+	int ret;
+
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(temp, sizeof(temp), "NG");
+		sec_cmd_set_cmd_result(sec, temp, strnlen(temp, sizeof(temp)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(info->client, 0x0A, 0x0A);
 
@@ -6058,11 +6466,22 @@ static void run_selfdnd_read_all(void *device_data)
 	write_reg(info->client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(info->client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
-	ts_set_touchmode(TOUCH_SELF_DND_MODE);
+	if (zt75xx_fix_active_mode(info, true) != I2C_SUCCESS) {
+		ret = -1;
+		goto NG;
+	}
 
-	get_raw_data(info, (u8 *)raw_data->selfdnd_data, 1);
+	ret = ts_set_touchmode(TOUCH_SELF_DND_MODE);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto NG;
+	}
+	ret = get_raw_data(info, (u8 *)raw_data->selfdnd_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto NG;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	buff = kzalloc(total_node * CMD_RESULT_WORD_LEN, GFP_KERNEL);
@@ -6080,7 +6499,9 @@ static void run_selfdnd_read_all(void *device_data)
 	kfree(buff);
 
 NG:
-	if(sec->cmd_state != SEC_CMD_STATUS_OK) {
+	zt75xx_fix_active_mode(info, false);
+
+	if (sec->cmd_state != SEC_CMD_STATUS_OK) {
 		snprintf(temp, SEC_CMD_STR_LEN, "NG");
 		sec_cmd_set_cmd_result(sec, temp, SEC_CMD_STR_LEN);
 		sec->cmd_state = SEC_CMD_STATUS_FAIL;
@@ -6106,6 +6527,16 @@ static void run_ssr_read(void *device_data)
 	s32 j;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(tx_buff, sizeof(tx_buff), "NG");
+		sec_cmd_set_cmd_result(sec, tx_buff, strnlen(tx_buff, sizeof(tx_buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -6113,14 +6544,17 @@ static void run_ssr_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	ret = ts_set_touchmode(DEF_RAW_SELF_SSR_DATA_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->ssr_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->ssr_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	tx_min = 0xFFFF;
@@ -6189,19 +6623,37 @@ static void run_ssr_read_all(void *device_data)
 	s32 j;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 #if ESD_TIMER_INTERVAL
 	esd_timer_stop(info);
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
+
+	if (zt75xx_fix_active_mode(info, true) != I2C_SUCCESS) {
+		ret = -1;
+		goto out;
+	}
 
 	ret = ts_set_touchmode(DEF_RAW_SELF_SSR_DATA_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->ssr_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->ssr_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	memset(all_cmdbuff, 0, sizeof(char) * (total_node * 6));
@@ -6216,6 +6668,8 @@ static void run_ssr_read_all(void *device_data)
 	sec->cmd_state = SEC_CMD_STATUS_OK;
 
 out:
+	zt75xx_fix_active_mode(info, false);
+
 	if (ret < 0) {
 		snprintf(buff, sizeof(buff), "%s", "NG");
 		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -6403,6 +6857,16 @@ static void run_jitter_read(void *device_data)
 	s32 i, j;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -6410,7 +6874,6 @@ static void run_jitter_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	if (write_reg(info->client, ZT75XX_JITTER_SAMPLING_CNT, 100) != I2C_SUCCESS)
 		input_info(true, &client->dev, "%s: Fail to set JITTER_CNT.\n", __func__);
@@ -6420,7 +6883,11 @@ static void run_jitter_read(void *device_data)
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->jitter_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->jitter_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	min = 0xFFFF;
@@ -6505,6 +6972,17 @@ static void run_jitter_read_all(void *device_data)
 	char *buff = NULL;
 	int total_node = info->cap_info.x_node_num * info->cap_info.y_node_num;
 	s32 i,j;
+	int ret;
+
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(temp, sizeof(temp), "NG");
+		sec_cmd_set_cmd_result(sec, temp, strnlen(temp, sizeof(temp)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(info->client, 0x0A, 0x0A);
 
@@ -6513,13 +6991,25 @@ static void run_jitter_read_all(void *device_data)
 	write_reg(info->client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(info->client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
+
+	if (zt75xx_fix_active_mode(info, true) != I2C_SUCCESS) {
+		ret = -1;
+		goto NG;
+	}
 
 	if (write_reg(info->client, ZT75XX_JITTER_SAMPLING_CNT, 100) != I2C_SUCCESS)
 		input_info(true, &info->client->dev, "%s: Fail to set JITTER_CNT.\n", __func__);
 
-	ts_set_touchmode(TOUCH_JITTER_MODE);
-	get_raw_data(info, (u8 *)raw_data->jitter_data, 1);
+	ret = ts_set_touchmode(TOUCH_JITTER_MODE);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto NG;
+	}
+	ret = get_raw_data(info, (u8 *)raw_data->jitter_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto NG;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	buff = kzalloc(total_node * CMD_RESULT_WORD_LEN, GFP_KERNEL);
@@ -6542,6 +7032,8 @@ static void run_jitter_read_all(void *device_data)
 	kfree(buff);
 
 NG:
+	zt75xx_fix_active_mode(info, false);
+
 	if (sec->cmd_state != SEC_CMD_STATUS_OK) {
 		snprintf(temp, SEC_CMD_STR_LEN, "NG");
 		sec_cmd_set_cmd_result(sec, temp, SEC_CMD_STR_LEN);
@@ -6555,12 +7047,13 @@ NG:
 }
 
 #define I2C_BUFFER_SIZE 64
-static bool get_raw_data_size(struct zt75xx_ts_info *info, u8 *buff, int skip_cnt, int sz)
+static int get_raw_data_size(struct zt75xx_ts_info *info, u8 *buff, int skip_cnt, int sz)
 {
 	struct zt75xx_ts_platform_data *pdata = info->pdata;
 	struct i2c_client *client = info->client;
-	int i;
+	int i, j = 0;
 	u32 temp_sz;
+	int retry_cnt = 150;
 
 	disable_irq(info->irq);
 
@@ -6570,14 +7063,20 @@ static bool get_raw_data_size(struct zt75xx_ts_info *info, u8 *buff, int skip_cn
 			__func__, info->work_state);
 		enable_irq(info->irq);
 		up(&info->work_lock);
-		return false;
+		return -1;
 	}
 
 	info->work_state = RAW_DATA;
 
 	for (i = 0; i < skip_cnt; i++) {
-		while (gpio_get_value(pdata->gpio_int))
-			usleep_range(1 * 1000, 1 * 1000);
+		j = 0;
+		while (gpio_get_value(pdata->gpio_int)) {
+			usleep_range(7 * 1000, 7 * 1000);
+			if (++j > retry_cnt) {
+				input_err(true, &client->dev, "%s: (skip_cnt) wait int timeout\n", __func__);
+				goto error_out;
+			}
+		}
 
 		write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 		usleep_range(1 * 1000, 1 * 1000);
@@ -6585,8 +7084,14 @@ static bool get_raw_data_size(struct zt75xx_ts_info *info, u8 *buff, int skip_cn
 
 	write_reg(client, 0x0A, 0x0A);
 
-	while (gpio_get_value(pdata->gpio_int))
-		usleep_range(1 * 1000, 1 * 1000);
+	j = 0;
+	while (gpio_get_value(pdata->gpio_int)) {
+		usleep_range(7 * 1000, 7 * 1000);
+		if (++j > retry_cnt) {
+			input_err(true, &client->dev, "%s: wait int timeout\n", __func__);
+			goto error_out;
+		}
+	}
 
 	for (i = 0; sz > 0; i++) {
 		temp_sz = I2C_BUFFER_SIZE;
@@ -6597,10 +7102,7 @@ static bool get_raw_data_size(struct zt75xx_ts_info *info, u8 *buff, int skip_cn
 			(char *)(buff + (i * I2C_BUFFER_SIZE)), temp_sz) < 0) {
 
 			input_err(true, &info->client->dev, "%s: error read zinitix tc raw data\n", __func__);
-			info->work_state = NOTHING;
-			enable_irq(info->irq);
-			up(&info->work_lock);
-			return false;
+			goto error_out;
 		}
 		sz -= I2C_BUFFER_SIZE;
 	}
@@ -6610,7 +7112,15 @@ static bool get_raw_data_size(struct zt75xx_ts_info *info, u8 *buff, int skip_cn
 	enable_irq(info->irq);
 	up(&info->work_lock);
 
-	return true;
+	return 0;
+
+error_out:
+	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
+	info->work_state = NOTHING;
+	enable_irq(info->irq);
+	up(&info->work_lock);
+
+	return -1;
 }
 
 static void run_reference_read(void *device_data)
@@ -6625,6 +7135,16 @@ static void run_reference_read(void *device_data)
 	int buffer_offset;
 	int ret;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -6632,15 +7152,18 @@ static void run_reference_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	ret = ts_set_touchmode(TOUCH_REFERENCE_MODE);
 	if (ret < 0) {
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data_size(info, (u8 *)raw_data->reference_data, 2,
+	ret = get_raw_data_size(info, (u8 *)raw_data->reference_data, 2,
 		info->cap_info.total_node_num * 2 + info->cap_info.y_node_num + info->cap_info.x_node_num);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	input_info(true,&client->dev, "%s: start\n",__func__);
@@ -6746,6 +7269,16 @@ static void run_self_sat_dnd_read(void *device_data)
 	s16 min, max;
 	s32 j;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -6753,7 +7286,6 @@ static void run_self_sat_dnd_read(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	ts_set_self_sat_touchmode(TOUCH_SELF_DND_MODE);
 	get_raw_data_size(info, (u8 *)raw_data->self_sat_dnd_data, 1, 32);
@@ -6845,7 +7377,11 @@ static void run_tsp_rawdata_read(void *device_data, u16 rawdata_mode, s16* buff)
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)buff, 2);
+	ret = get_raw_data(info, (u8 *)buff, 2);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	input_info(true, &info->client->dev, "%s: mode %d\n", __func__, rawdata_mode);
@@ -6893,6 +7429,16 @@ static void run_mis_cal_read(void * device_data)
 	u16 chip_eeprom_info;
 	int min = 0xFFFF, max = -0xFF;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -6901,7 +7447,6 @@ static void run_mis_cal_read(void * device_data)
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
 	disable_irq(info->irq);
-	sec_cmd_set_default_result(sec);
 
 	if (pdata->mis_cal_check == 0) {
 		input_info(true, &info->client->dev, "%s: not support\n", __func__);
@@ -6934,7 +7479,7 @@ static void run_mis_cal_read(void * device_data)
 		goto NG;
 	}
 	ret = get_raw_data(info, (u8 *)raw_data->reference_data_abnormal, 2);
-	if (!ret) {
+	if (ret < 0) {
 		input_info(true, &info->client->dev, "%s: i2c fail!\n", __func__);
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		mis_cal_data = 0xF4;
@@ -7028,6 +7573,16 @@ static void get_mis_cal(void *device_data)
 	int x_node, y_node;
 	int node_num;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 	disable_irq(info->irq);
@@ -7036,7 +7591,6 @@ static void get_mis_cal(void *device_data)
 	write_reg(client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	write_cmd(client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
-	sec_cmd_set_default_result(sec);
 
 	x_node = sec->cmd_param[0];
 	y_node = sec->cmd_param[1];
@@ -7086,6 +7640,16 @@ static void run_mis_cal_read_all(void * device_data)
 	int total_node = info->cap_info.x_node_num * info->cap_info.y_node_num;
 	int i, j, offset;
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(temp, sizeof(temp), "NG");
+		sec_cmd_set_cmd_result(sec, temp, strnlen(temp, sizeof(temp)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(info->client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -7094,8 +7658,6 @@ static void run_mis_cal_read_all(void * device_data)
 	write_cmd(info->client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
 	disable_irq(info->irq);
-
-	sec_cmd_set_default_result(sec);
 
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
@@ -7169,6 +7731,14 @@ static void get_tsp_test_result(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(cbuff, sizeof(cbuff), "NG");
+		sec_cmd_set_cmd_result(sec, cbuff, strnlen(cbuff, sizeof(cbuff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	get_zt_tsp_nvm_data(info, ZT75XX_TS_NVM_OFFSET_FAC_RESULT, (u8 *)buff, 2);
 	info->test_result.data[0] = buff[0];
 
@@ -7199,6 +7769,14 @@ static void set_tsp_test_result(void *device_data)
 	u8 buff[2] = {0};
 
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(cbuff, sizeof(cbuff), "NG");
+		sec_cmd_set_cmd_result(sec, cbuff, strnlen(cbuff, sizeof(cbuff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	get_zt_tsp_nvm_data(info, ZT75XX_TS_NVM_OFFSET_FAC_RESULT, (u8 *)buff, 2);
 	info->test_result.data[0] = buff[0];
@@ -7246,7 +7824,7 @@ static void increase_disassemble_count(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
 		snprintf(buff, sizeof(buff), "%s", "NG");
 		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -7284,7 +7862,7 @@ static void get_disassemble_count(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
 		snprintf(buff, sizeof(buff), "%s", "NG");
 		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -7580,6 +8158,14 @@ static void tclm_test_cmd(void *device_data)
 	if (!data->support_tclm_test)
 		goto not_support;
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	ret = tclm_test_command(data, sec->cmd_param[0], sec->cmd_param[1], sec->cmd_param[2], buff);
 	if (ret < 0)
 		sec->cmd_state = SEC_CMD_STATUS_FAIL;
@@ -7743,13 +8329,21 @@ static void ium_r_write(void *device_data)
 	struct zt75xx_ts_info *info = container_of(sec, struct zt75xx_ts_info, sec);
 	char buff[SEC_CMD_STR_LEN] = { 0 };
 
+	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	sec->cmd_param[1] = sec->cmd_param[0];
 
 	input_info(true, &info->client->dev, "%s: %x %x", __func__, sec->cmd_param[0], sec->cmd_param[1]);
 
 	set_zt_tsp_nvm_data(info, sec->cmd_param[0], (u8 *)&sec->cmd_param[0], 2);
-
-	sec_cmd_set_default_result(sec);
 
 	ium_random_write(info, sec->cmd_param[0]);
 
@@ -7765,9 +8359,17 @@ static void ium_r_read(void *device_data)
 	char buff[SEC_CMD_STR_LEN] = { 0 };
 	u8 val = sec->cmd_param[0];
 
-	ium_random_read(info, val);
-
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
+	ium_random_read(info, val);
 
 	snprintf(buff, sizeof(buff), "OK");
 	sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
@@ -7959,6 +8561,14 @@ static void clear_reference_data(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 #if ESD_TIMER_INTERVAL
@@ -8007,60 +8617,40 @@ int zt_tclm_execute_force_calibration(struct i2c_client *client, int cal_mode)
 	return 0;
 }
 
-static void ts_enter_strength_mode(struct zt75xx_ts_info *info, int testnum)
+static int ts_enter_strength_mode(struct zt75xx_ts_info *info, int testnum)
 {
 	struct i2c_client *client = info->client;
+	int ret = 0;
 
-	down(&info->work_lock);
-
-	info->touch_mode = testnum;
-
-	write_reg(client, 0x0A, 0x0A);
-
-	if (write_reg(client, 0x007E, 1) != I2C_SUCCESS) {
-		input_info(true, &client->dev, "%s: Fail to set report_rate 1\n", __func__);
-		up(&info->work_lock);
-		return;
+	if (zt75xx_fix_active_mode(info, true) != I2C_SUCCESS) {
+		ret = -1;
+		input_err(true, &client->dev, "%s: Fail to set active_mode fix\n", __func__);
+		return ret;
 	}
 
-	if (write_reg(client, ZT75XX_TOUCH_MODE, testnum) != I2C_SUCCESS) {
-		input_info(true, &client->dev, "%s: Fail to set ZINITX_TOUCH_MODE %d\n", __func__, testnum);
-		up(&info->work_lock);
-		return;
+	if (ts_set_touchmode(testnum) < 0) {
+		ret = -1;
+		input_err(true, &client->dev, "%s: Fail to set ZINITX_TOUCH_MODE %d\n", __func__, testnum);
+		return ret;
 	}
 
 	clear_report_data(info);
 
-	input_info(true, &client->dev, "%s: Enter_strength_mode\n", __func__);
+	input_info(true, &client->dev, "%s\n", __func__);
 
-	up(&info->work_lock);
+	return ret;
 }
 
 static void ts_exit_strength_mode(struct zt75xx_ts_info *info)
 {
 	struct i2c_client *client = info->client;
 
-	down(&info->work_lock);
+	ts_set_touchmode(TOUCH_POINT_MODE);
 
-	write_reg(client, 0x0A, 0x0A);
+	zt75xx_fix_active_mode(info, false);
 
-	if (write_reg(client, ZT75XX_TOUCH_MODE, TOUCH_POINT_MODE) != I2C_SUCCESS) {
-		input_info(true, &client->dev, "[zinitix_touch] TEST Mode : "
-				"Fail to set ZINITX_TOUCH_MODE %d.\r\n", TOUCH_POINT_MODE);
-		up(&info->work_lock);
-		return;
-	}
-	if (write_reg(client, 0x007E, 0) != I2C_SUCCESS) {
-		input_info(true, &client->dev, "[zinitix_touch] report_rate : "
-				"Fail to set report_rate %d.\r\n", 0);
-		up(&info->work_lock);
-		return;
-	}
 	clear_report_data(info);
-	input_info(true, &client->dev, "[zinitix_touch] Exit_strength_mode\r\n");
-
-	info->touch_mode = TOUCH_POINT_MODE;
-	up(&info->work_lock);
+	input_info(true, &client->dev, "%s\n", __func__);
 }
 
 static void ts_get_strength_data(struct zt75xx_ts_info *info)
@@ -8093,32 +8683,37 @@ static void run_cs_raw_read_all(void *device_data)
 	struct zt75xx_ts_info *info = container_of(sec, struct zt75xx_ts_info, sec);
 	struct i2c_client *client = info->client;
 	char buff[SEC_CMD_STR_LEN] = { 0 };
-	int retry = 0;
+	int retry_cnt = 150;
 	char all_cmdbuff[info->cap_info.x_node_num*info->cap_info.y_node_num * 6];
 	s32 i, j;
+	int ret;
 
 	sec_cmd_set_default_result(sec);
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
 		goto NG;
 	}
 
 	disable_irq(info->irq);
 
-	ts_enter_strength_mode(info, TOUCH_RAW_MODE);
-
-	while (gpio_get_value(info->pdata->gpio_int)) {
-		msleep(30);
-
-		retry++;
-
-		input_info(true, &client->dev, "%s: retry:%d\n", __func__, retry);
-
-		if (retry > 100)
-			goto out;
+	ret = ts_enter_strength_mode(info, TOUCH_RAW_MODE);
+	if (ret < 0) {
+		goto out;
 	}
-	ts_get_raw_data(info);
+
+	j = 0;
+	while (gpio_get_value(info->pdata->gpio_int)) {
+		usleep_range(7 * 1000, 7 * 1000);
+		if (++j > retry_cnt) {
+			input_err(true, &client->dev, "%s: wait int timeout\n", __func__);
+			goto out;
+		}
+	}
+	ret = ts_get_raw_data(info);
+	if (!ret) {
+		goto out;
+	}
 
 	ts_exit_strength_mode(info);
 
@@ -8161,32 +8756,37 @@ static void run_cs_delta_read_all(void *device_data)
 	struct zt75xx_ts_info *info = container_of(sec, struct zt75xx_ts_info, sec);
 	struct i2c_client *client = info->client;
 	char buff[SEC_CMD_STR_LEN] = { 0 };
-	int retry = 0;
+	int retry_cnt = 150;
 	char all_cmdbuff[info->cap_info.x_node_num*info->cap_info.y_node_num * 6];
 	s32 i, j;
+	int ret;
 
 	sec_cmd_set_default_result(sec);
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
 		goto NG;
 	}
 
 	disable_irq(info->irq);
 
-	ts_enter_strength_mode(info, TOUCH_DELTA_MODE);
-
-	while (gpio_get_value(info->pdata->gpio_int)) {
-		msleep(30);
-
-		retry++;
-
-		input_info(true, &client->dev, "%s: retry:%d\n", __func__, retry);
-
-		if (retry > 100)
-			goto out;
+	ret = ts_enter_strength_mode(info, TOUCH_DELTA_MODE);
+	if (ret < 0) {
+		goto out;
 	}
-	ts_get_raw_data(info);
+
+	j = 0;
+	while (gpio_get_value(info->pdata->gpio_int)) {
+		usleep_range(7 * 1000, 7 * 1000);
+		if (++j > retry_cnt) {
+			input_err(true, &client->dev, "%s: wait int timeout\n", __func__);
+			goto out;
+		}
+	}
+	ret = ts_get_raw_data(info);
+	if (!ret) {
+		goto out;
+	}
 
 	ts_exit_strength_mode(info);
 
@@ -8234,6 +8834,14 @@ static void run_ref_calibration(void *device_data)
 	int ret;
 #endif
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	if (info->finger_cnt1 != 0) {
 		input_info(true, &client->dev, "%s: return (finger cnt %d)\n", __func__, info->finger_cnt1);
@@ -8314,7 +8922,7 @@ static void dead_zone_enable(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
-	if(val) //normal
+	if (val) //normal
 		zinitix_bit_clr(m_optional_mode.select_mode.flag, DEF_OPTIONAL_MODE_EDGE_SELECT);
 	else //factory
 		zinitix_bit_set(m_optional_mode.select_mode.flag, DEF_OPTIONAL_MODE_EDGE_SELECT);
@@ -8343,11 +8951,9 @@ static void spay_enable(void *device_data)
 	}
 
 	if (val) {
-		info->spay_enable = 1;
-		zinitix_bit_set(lpm_mode_reg.flag, BIT_EVENT_SPAY);
+		zinitix_bit_set(info->lowpower_mode, BIT_EVENT_SPAY);
 	} else {
-		info->spay_enable = 0;
-		zinitix_bit_clr(lpm_mode_reg.flag, BIT_EVENT_SPAY);
+		zinitix_bit_clr(info->lowpower_mode, BIT_EVENT_SPAY);
 	}
 
 	snprintf(buff, sizeof(buff), "%s", "OK");
@@ -8376,11 +8982,9 @@ static void aot_enable(void *device_data)
 	}
 
 	if (val) {
-		info->aot_enable = 1;
-		zinitix_bit_set(lpm_mode_reg.flag, BIT_EVENT_AOT);
+		zinitix_bit_set(info->lowpower_mode, BIT_EVENT_AOT);
 	} else {
-		info->aot_enable = 0;
-		zinitix_bit_clr(lpm_mode_reg.flag, BIT_EVENT_AOT);
+		zinitix_bit_clr(info->lowpower_mode, BIT_EVENT_AOT);
 	}
 
 	snprintf(buff, sizeof(buff), "%s", "OK");
@@ -8409,11 +9013,9 @@ static void aod_enable(void *device_data)
 	}
 
 	if (val) {
-		info->aod_enable = 1;
-		zinitix_bit_set(lpm_mode_reg.flag, BIT_EVENT_AOD);
+		zinitix_bit_set(info->lowpower_mode, BIT_EVENT_AOD);
 	} else {
-		info->aod_enable = 0;
-		zinitix_bit_clr(lpm_mode_reg.flag, BIT_EVENT_AOD);
+		zinitix_bit_clr(info->lowpower_mode, BIT_EVENT_AOD);
 	}
 
 	snprintf(buff, sizeof(buff), "%s", "OK");
@@ -8437,6 +9039,13 @@ static void set_aod_rect(void *device_data)
 	if (!info->pdata->support_aod) {
 		snprintf(buff, sizeof(buff), "%s", "NA");
 		sec->cmd_state = SEC_CMD_STATUS_NOT_APPLICABLE;
+		goto out;
+	}
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
 		goto out;
 	}
 
@@ -8470,6 +9079,14 @@ static void get_wet_mode(void *device_data)
 
 	sec_cmd_set_default_result(sec);
 
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
+
 	write_reg(client, 0x0A, 0x0A);
 
 	down(&info->work_lock);
@@ -8502,6 +9119,15 @@ static void fix_active_mode(void *device_data)
 	int ret;
 
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		sec_cmd_set_cmd_exit(sec);
+		return;
+	}
 
 	if (sec->cmd_param[0] < 0 || sec->cmd_param[0] > 1) {
 		snprintf(buff, sizeof(buff), "%s", "NG");
@@ -8566,7 +9192,7 @@ static void factory_cmd_result_all(void *device_data)
 	sec->item_count = 0;
 	memset(sec->cmd_result_all, 0x00, SEC_CMD_RESULT_STR_LEN);
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
 		sec->cmd_all_factory_state = SEC_CMD_STATUS_FAIL;
 		goto out;
@@ -8609,6 +9235,14 @@ static void check_connection(void *device_data)
 	int ret;
 
 	sec_cmd_set_default_result(sec);
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		snprintf(buff, sizeof(buff), "NG");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		return;
+	}
 
 	write_reg(client, 0x0A, 0x0A);
 
@@ -8656,10 +9290,16 @@ static ssize_t sensitivity_mode_show(struct device *dev,
 {
 	struct sec_cmd_data *sec = dev_get_drvdata(dev);
 	struct zt75xx_ts_info *info = container_of(sec, struct zt75xx_ts_info, sec);
-	s16 value[5];
+	s16 value[5] = {0};
+
+	if (info->power_state == POWER_STATE_OFF) {
+		input_err(true, &info->client->dev, "%s: IC is power off\n", __func__);
+		goto out;
+	}
 
 	get_raw_data_size(info, (u8*) value, 2, 10);
 
+out:
 	input_info(true, &info->client->dev, "%s: sensitivity mode,%d,%d,%d,%d,%d\n", __func__,
 		value[0], value[1], value[2], value[3], value[4]);
 
@@ -8686,7 +9326,7 @@ static ssize_t sensitivity_mode_store(struct device *dev,
 	if (ret != 0)
 		return ret;
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_err(true, &info->client->dev, "%s: power off in IC\n", __func__);
 		return 0;
 	}
@@ -8829,11 +9469,6 @@ static ssize_t set_ta_mode_store(struct device *dev,
 	if (ret != 0)
 		return ret;
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
-		input_err(true, &info->client->dev, "%s: power off in IC\n", __func__);
-		return 0;
-	}
-
 	input_info(true, &info->client->dev, "%s: enable:%d\n", __func__, value);
 
 	if (value == 1) {
@@ -8891,7 +9526,7 @@ static ssize_t read_support_feature(struct device *dev,
 	u32 feature = 0;
 
 	if (info->pdata->support_aot)
-		feature |= INPUT_FEATURE_SUPPORT_AOT;
+		feature |= INPUT_FEATURE_ENABLE_SETTINGS_AOT;
 
 	snprintf(buff, sizeof(buff), "%d", feature);
 	input_info(true, &client->dev, "%s: %s\n", __func__, buff);
@@ -9190,6 +9825,7 @@ static struct sec_cmd sec_cmds[] = {
 #endif
 	{SEC_CMD("factory_cmd_result_all", factory_cmd_result_all),},
 	{SEC_CMD("check_connection", check_connection),},
+	{SEC_CMD("debug", debug),},
 	{SEC_CMD("not_support_cmd", not_support_cmd),},
 };
 
@@ -9655,7 +10291,7 @@ static int zt75xx_power_ctrl(void *data, bool on)
 	struct regulator *regulator_avdd;
 	int retval = 0;
 
-	if (info->tsp_pwr_enabled == on)
+	if (!!info->power_state == on)
 		return retval;
 /*
 	if (!pdata->gpio_ldo_en) {
@@ -9702,7 +10338,10 @@ static int zt75xx_power_ctrl(void *data, bool on)
 			regulator_disable(regulator_avdd);
 	}
 
-	info->tsp_pwr_enabled = on;
+	if (on)
+		info->power_state = POWER_STATE_ON;
+	else
+		info->power_state = POWER_STATE_OFF;
 /*
 	if (!pdata->gpio_ldo_en)
 		regulator_put(regulator_dvdd);
@@ -9805,6 +10444,7 @@ static int zt75xx_ts_parse_dt(struct device_node *np,
 	pdata->support_lpm_mode = (pdata->support_spay | pdata->support_aod | pdata->support_aot);
 	pdata->bringup = of_property_read_bool(np, "zinitix,bringup");
 	pdata->mis_cal_check = of_property_read_bool(np, "zinitix,mis_cal_check");
+	pdata->support_hall_ic = of_property_read_bool(np, "support_hall_ic");
 
 	if (of_property_read_u32(np, "zinitix,factory_item_version", &pdata->item_version) < 0)
 		pdata->item_version = 0;
@@ -9928,18 +10568,28 @@ static void zt75xx_run_dnd(struct zt75xx_ts_info *info)
 	write_cmd(info->client, ZT75XX_CLEAR_INT_STATUS_CMD);
 #endif
 
+	if (zt75xx_fix_active_mode(info, true) != I2C_SUCCESS) {
+		goto out;
+	}
+
 	ret = ts_set_touchmode(TOUCH_DND_MODE);
 	if (ret < 0) {
 		input_raw_info(true, &info->client->dev, "%s: failed to set testmode\n", __func__);
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		goto out;
 	}
-	get_raw_data(info, (u8 *)raw_data->dnd_data, 1);
+	ret = get_raw_data(info, (u8 *)raw_data->dnd_data, 1);
+	if (ret < 0) {
+		ts_set_touchmode(TOUCH_POINT_MODE);
+		goto out;
+	}
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
 	zt75xx_display_rawdata(info, raw_data, &min, &max, false);
 
 out:
+	zt75xx_fix_active_mode(info, false);
+
 #if ESD_TIMER_INTERVAL
 	esd_timer_start(CHECK_ESD_TIMER, info);
 	write_reg(info->client, ZT75XX_PERIODICAL_INTERRUPT_INTERVAL,
@@ -10002,7 +10652,7 @@ static void zt75xx_run_mis_cal(struct zt75xx_ts_info *info)
 		goto NG;
 	}
 	ret = get_raw_data(info, (u8 *)raw_data->reference_data_abnormal, 2);
-	if (!ret) {
+	if (ret < 0) {
 		input_raw_info(true, &info->client->dev, "%s: i2c fail\n", __func__);
 		ts_set_touchmode(TOUCH_POINT_MODE);
 		mis_cal_data = 0xF4;
@@ -10060,7 +10710,7 @@ static void zt75xx_check_rawdata(struct work_struct *work)
 		return;
 	}
 
-	if (info->tsp_pwr_enabled == POWER_OFF) {
+	if (info->power_state == POWER_STATE_OFF) {
 		input_info(true, &info->client->dev, "%s: ignored ## IC is power off\n", __func__);
 		return;
 	}
@@ -10131,6 +10781,58 @@ static void zt_print_info_work(struct work_struct *work)
 }
 
 #ifdef CONFIG_TOUCHSCREEN_DUAL_FOLDABLE
+static void zinitix_chk_tsp_ic_status(struct zt75xx_ts_info *info, int call_pos)
+{
+	input_info(true, &info->client->dev,
+			"%s: START : pos[%d] power_status[0x%X] lowpower_mode[0x%X] %sfolding\n",
+			__func__, call_pos, info->power_state, info->lowpower_mode,
+			info->flip_status_current ? "": "un");
+
+	if (call_pos == ZINITIX_STATE_CHK_POS_OPEN) {
+		input_dbg(true, &info->client->dev, "%s: OPEN  : Nothing\n", __func__);
+
+	} else if (call_pos == ZINITIX_STATE_CHK_POS_CLOSE) {
+		input_dbg(true, &info->client->dev, "%s: CLOSE : Nothing\n", __func__);
+
+	} else if (call_pos == ZINITIX_STATE_CHK_POS_HALL) {
+		if (info->power_state == POWER_STATE_LPM && info->flip_status_current == ZINITIX_STATUS_UNFOLDING) {
+			input_info(true, &info->client->dev, "%s: HALL  : TSP IC LP => IC OFF\n", __func__);
+			zt75xx_ts_stop(info);
+
+		} else if (info->power_state == POWER_STATE_OFF && info->flip_status_current == ZINITIX_STATUS_FOLDING
+				&& (info->pdata->support_lpm_mode && info->lowpower_mode != 0)) {
+			input_info(true, &info->client->dev, "%s: HALL  : TSP IC OFF => LP[0x%X]\n", __func__, info->lowpower_mode);
+			zt75xx_ts_start(info);
+			zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+		} else {
+			input_info(true, &info->client->dev, "%s: HALL  : nothing!\n", __func__);
+		}
+
+	} else if (call_pos == ZINITIX_STATE_CHK_POS_SYSFS && info->flip_status_current == ZINITIX_STATUS_FOLDING) {
+		if (info->power_state == POWER_STATE_OFF && (info->pdata->support_lpm_mode && info->lowpower_mode)){
+			input_info(true, &info->client->dev, "%s: SYSFS : TSP IC OFF => LP mode[0x%X]\n", __func__, info->lowpower_mode);
+			zt75xx_ts_start(info);
+			zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+
+		} else if (info->power_state == POWER_STATE_LPM && (info->pdata->support_lpm_mode && info->lowpower_mode == 0)) {
+			input_info(true, &info->client->dev, "%s: SYSFS : LP mode [0x0] => IC OFF\n", __func__);
+			zt75xx_ts_stop(info);
+
+		} else if (info->power_state == POWER_STATE_LPM && (info->pdata->support_lpm_mode && info->lowpower_mode != 0)) {
+			input_info(true, &info->client->dev, "%s: SYSFS : call LP mode again\n", __func__);
+			zt75xx_ts_set_lowpowermode(info, TO_LOWPOWER_MODE);
+
+		} else {
+			input_info(true, &info->client->dev, "%s: SYSFS : nothing!\n", __func__);
+		}
+	} else {
+		input_info(true, &info->client->dev, "%s: Abnormal case\n", __func__);
+	}
+
+	input_info(true, &info->client->dev, "%s: END   : pos[%d] power_status[0x%X], lowpower_mode[0x%X]\n",
+			__func__, call_pos, info->power_state, info->lowpower_mode);
+}
+
 static void zt75xx_switching_work(struct work_struct *work)
 {
 	struct zt75xx_ts_info *info = container_of(work, struct zt75xx_ts_info,
@@ -10152,16 +10854,12 @@ static void zt75xx_switching_work(struct work_struct *work)
 		mutex_lock(&info->switching_mutex);
 		info->flip_status = info->flip_status_current;
 
-		if (info->flip_status == 0) {
-			/* open : sub_tsp off */
-		} else {
-			/* close : sub_tsp on */
-		}
-
+		zinitix_chk_tsp_ic_status(info, ZINITIX_STATE_CHK_POS_HALL);
 		mutex_unlock(&info->switching_mutex);
 	}
 }
 
+#ifdef CONFIG_FOLDER_HALL
 static int zt75xx_hall_ic_notify(struct notifier_block *nb,
 			unsigned long flip_cover, void *v)
 {
@@ -10184,6 +10882,7 @@ static int zt75xx_hall_ic_notify(struct notifier_block *nb,
 
 	return 0;
 }
+#endif
 #endif
 
 static int zt75xx_ts_probe(struct i2c_client *client,
@@ -10304,7 +11003,6 @@ static int zt75xx_ts_probe(struct i2c_client *client,
 		ret = -EPERM;
 		goto err_power_sequence;
 	}
-	info->power_state = POWER_STATE_ON;
 
 	/* To Do */
 	/* FW version read from tsp */
@@ -10378,7 +11076,7 @@ static int zt75xx_ts_probe(struct i2c_client *client,
 
 	if (pdata->support_lpm_mode) {
 		set_bit(KEY_BLACK_UI_GESTURE, info->input_dev->keybit);
-		set_bit(KEY_HOMEPAGE, info->input_dev->keybit);
+		set_bit(KEY_WAKEUP, info->input_dev->keybit);
 	}
 
 	input_set_abs_params(info->input_dev, ABS_MT_POSITION_X,
@@ -10503,10 +11201,14 @@ static int zt75xx_ts_probe(struct i2c_client *client,
 	/* Hall IC notify priority -> ftn -> register */
 	info->flip_status = -1;
 	info->flip_status_current = -1;
+#ifdef CONFIG_FOLDER_HALL
 	info->hall_ic_nb.priority = 1;
 	info->hall_ic_nb.notifier_call = zt75xx_hall_ic_notify;
-//	hall_ic_register_notify(&info->hall_ic_nb);
-//	input_info(true, &info->client->dev, "%s: hall ic register\n", __func__);
+	if (info->pdata->support_hall_ic) {
+		hall_ic_register_notify(&info->hall_ic_nb);
+		input_info(true, &info->client->dev, "%s: hall ic register\n", __func__);
+	}
+#endif
 #endif
 
 	schedule_delayed_work(&info->work_read_info, msecs_to_jiffies(50));
@@ -10517,7 +11219,8 @@ static int zt75xx_ts_probe(struct i2c_client *client,
 	p_ghost_check = &info->ghost_check;
 #endif
 #ifdef CONFIG_INPUT_SEC_SECURE_TOUCH
-	sec_secure_touch_register(info, info->pdata->ss_touch_num, &info->input_dev->dev.kobj);
+	if (info->pdata->ss_touch_num > 0)
+		sec_secure_touch_register(info, info->pdata->ss_touch_num, &info->input_dev->dev.kobj);
 #endif
 	input_info(true, &client->dev, "%s: done\n", __func__);
 	input_log_fix();
@@ -10620,9 +11323,7 @@ static int zt75xx_ts_remove(struct i2c_client *client)
 
 	if (gpio_is_valid(pdata->gpio_int) != 0)
 		gpio_free(pdata->gpio_int);
-#ifdef CONFIG_INPUT_SEC_SECURE_TOUCH
-	secure_touch_remove(info);
-#endif
+
 	input_unregister_device(info->input_dev);
 	input_free_device(info->input_dev);
 	up(&info->work_lock);

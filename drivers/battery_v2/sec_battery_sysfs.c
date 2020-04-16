@@ -11,6 +11,7 @@
  */
 #include "include/sec_battery.h"
 #include "include/sec_battery_sysfs.h"
+#include "include/sec_charging_common.h"
 
 #include <linux/sec_param.h>
 #include <linux/sec_debug.h>
@@ -246,6 +247,7 @@ static struct device_attribute sec_battery_attrs[] = {
 	SEC_BATTERY_ATTR(direct_charging_step),
 	SEC_BATTERY_ATTR(direct_charging_total_step),
 	SEC_BATTERY_ATTR(direct_charging_iin),
+	SEC_BATTERY_ATTR(switch_charging_source),
 #endif
 	SEC_BATTERY_ATTR(charging_type),
 #if defined(CONFIG_SEC_FACTORY)
@@ -456,6 +458,10 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 	case SUB_BAT_TEMP:
 		if (sec_bat_get_value_by_adc(battery,
 				SEC_BAT_ADC_CHANNEL_SUB_BAT_TEMP, &value, battery->pdata->sub_bat_temp_check_type)) {
+#if defined(CONFIG_SEC_BLOOMQ_PROJECT)
+			extern int adjust_sub_bat_temp(int chg_temp, int bat_temp, int sub_bat_temp);
+			value.intval = adjust_sub_bat_temp(battery->chg_temp, battery->temperature, value.intval);
+#endif
 			i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
 				       value.intval);
 		} else {
@@ -673,10 +679,13 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 	case HV_CHARGER_STATUS:
 		{
 			int check_val = 0;
-			if(is_wireless_type(battery->cable_type))
+			if(is_wireless_type(battery->cable_type)) {
 				check_val = 0;
-			else {
+			} else {
 				if (is_pd_wire_type(battery->cable_type) &&
+					battery->pd_max_charge_power >= HV_CHARGER_STATUS_STANDARD4)
+					check_val = SFC_45W;
+				else if (is_pd_wire_type(battery->cable_type) &&
 					battery->pd_max_charge_power >= HV_CHARGER_STATUS_STANDARD3)
 					check_val = SFC_25W;
 				else if (is_hv_wire_12v_type(battery->cable_type) ||
@@ -685,11 +694,12 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 				else if (is_hv_wire_type(battery->cable_type) ||
 					(is_pd_wire_type(battery->cable_type) &&
 					battery->pd_max_charge_power >= HV_CHARGER_STATUS_STANDARD1 &&
-					battery->hv_pdo) ||
+					battery->pdic_info.sink_status.available_pdo_num > 1) ||
 					battery->wire_status == SEC_BATTERY_CABLE_PREPARE_TA ||
 					battery->max_charge_power >= HV_CHARGER_STATUS_STANDARD1) /* 12000mW */
 					check_val = AFC_9V_OR_15W;
 			}
+			pr_info("%s : HV_CHARGER_STATUS(%d) pd max charge power(%d)\n", __func__, check_val, battery->pd_max_charge_power);
 			i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n", check_val);
 		}
 		break;
@@ -807,72 +817,84 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 	case BATT_INBAT_VOLTAGE:
 	case BATT_INBAT_VOLTAGE_OCV:
 		if(battery->pdata->support_fgsrc_change == true) {
-			int j;
-#if defined(CONFIG_FUELGAUGE_S2MU106)
-			value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_ON;
-			psy_do_property(battery->pdata->fgsrc_switch_name, set,
-					POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
+			int j, is_lsi;
 
-			mdelay(4000); // sampling time
+			is_lsi = (!strcmp(battery->pdata->fuelgauge_name, "s2mu106-fuelgauge") ||
+				!strcmp(battery->pdata->fuelgauge_name, "s2mu107-fuelgauge")) ? 1 : 0;
 
-			for (j = 0; j < 10; j++) {
-				psy_do_property(battery->pdata->fuelgauge_name, get,
-							POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
-				pr_info("%s: ocv_data[%d]: %d\n", __func__, j, value.intval);
-				if (value.intval >= 0) {
-					ret = value.intval;
-
-#if defined(CONFIG_DUAL_BATTERY)
-					value.intval = SEC_DUAL_BATTERY_MAIN;
-					psy_do_property(battery->pdata->dual_battery_name, get,
-							POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
-					value.intval = SEC_DUAL_BATTERY_SUB;
-					psy_do_property(battery->pdata->dual_battery_name, get,
-							POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
-#endif
-					break;
-				}
-			}
-
-			if (battery->is_jig_on || battery->factory_mode || factory_mode) {
-				value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_OFF;
+			if (is_lsi) {
+				value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_ON;
 				psy_do_property(battery->pdata->fgsrc_switch_name, set,
 						POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
-			}
-#else
-			int k, ocv, ocv_data[10];
 
-			value.intval = 0;
-			psy_do_property(battery->pdata->fgsrc_switch_name, set,
-					POWER_SUPPLY_PROP_ENERGY_NOW, value);
+				mdelay(4000); // sampling time
 
-			for (j = 0; j < 10; j++) {
-				mdelay(175);
-				psy_do_property(battery->pdata->fuelgauge_name, get,
-						POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
-				ocv_data[j] = value.intval;
-				pr_info("%s: ocv_data[%d]: %d\n", __func__, j, ocv_data[j]);
-			}
+				for (j = 0; j < 10; j++) {
+					psy_do_property(battery->pdata->fuelgauge_name, get,
+								POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
+					pr_info("%s: ocv_data[%d]: %d\n", __func__, j, value.intval);
+					if (value.intval >= 0) {
+						ret = value.intval;
 
-			value.intval = 1;
-			psy_do_property(battery->pdata->fgsrc_switch_name, set,
-					POWER_SUPPLY_PROP_ENERGY_NOW, value);
-
-			for (j = 1; j < 10; j++) {
-				ocv = ocv_data[j];
-				k = j;
-				while (k > 0 && ocv_data[k-1] > ocv) {
-					ocv_data[k] = ocv_data[k-1];
-					k--;
-				}
-				ocv_data[k] = ocv;
-			}
-			ocv = 0;
-			for (j = 2; j < 8; j++) {
-				ocv += ocv_data[j];
-			}
-			ret = ocv / 6;
+#if defined(CONFIG_DUAL_BATTERY)
+						value.intval = SEC_DUAL_BATTERY_MAIN;
+						psy_do_property(battery->pdata->dual_battery_name, get,
+								POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
+						value.intval = SEC_DUAL_BATTERY_SUB;
+						psy_do_property(battery->pdata->dual_battery_name, get,
+								POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
 #endif
+						break;
+					}
+				}
+
+				if (battery->is_jig_on || battery->factory_mode || factory_mode) {
+					value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_OFF;
+					psy_do_property(battery->pdata->fgsrc_switch_name, set,
+							POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
+				}
+			} else { 
+				int k, ocv, ocv_data[10];
+
+				value.intval = 0;
+				psy_do_property(battery->pdata->fgsrc_switch_name, set,
+						POWER_SUPPLY_PROP_ENERGY_NOW, value);
+
+				for (j = 0; j < 10; j++) {
+					mdelay(175);
+					psy_do_property(battery->pdata->fuelgauge_name, get,
+							POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
+					ocv_data[j] = value.intval;
+					pr_info("%s: ocv_data[%d]: %d\n", __func__, j, ocv_data[j]);
+				}
+#if defined(CONFIG_DUAL_BATTERY)
+				value.intval = SEC_DUAL_BATTERY_MAIN;
+				psy_do_property(battery->pdata->dual_battery_name, get,
+					POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
+				value.intval = SEC_DUAL_BATTERY_SUB;
+				psy_do_property(battery->pdata->dual_battery_name, get,
+					POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
+#endif
+
+				value.intval = 1;
+				psy_do_property(battery->pdata->fgsrc_switch_name, set,
+						POWER_SUPPLY_PROP_ENERGY_NOW, value);
+
+				for (j = 1; j < 10; j++) {
+					ocv = ocv_data[j];
+					k = j;
+					while (k > 0 && ocv_data[k-1] > ocv) {
+						ocv_data[k] = ocv_data[k-1];
+						k--;
+					}
+					ocv_data[k] = ocv;
+				}
+				ocv = 0;
+				for (j = 2; j < 8; j++) {
+					ocv += ocv_data[j];
+				}
+				ret = ocv / 6;
+			}
 		} else {
 #if defined(CONFIG_FUELGAUGE_SM5705)
 			psy_do_property(battery->pdata->fuelgauge_name, get,
@@ -1413,21 +1435,21 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 
 			pcisd->data[CISD_DATA_FULL_COUNT_PER_DAY] = 1;
 			pcisd->data[CISD_DATA_BATT_TEMP_MAX_PER_DAY] = -300;
+			pcisd->data[CISD_DATA_SUB_BATT_TEMP_MAX_PER_DAY] = -300;
 			pcisd->data[CISD_DATA_CHG_TEMP_MAX_PER_DAY] = -300;
-			pcisd->data[CISD_DATA_WPC_TEMP_MAX_PER_DAY] = -300;
 			pcisd->data[CISD_DATA_USB_TEMP_MAX_PER_DAY] = -300;
 			pcisd->data[CISD_DATA_BATT_TEMP_MIN_PER_DAY] = 1000;
+			pcisd->data[CISD_DATA_SUB_BATT_TEMP_MIN_PER_DAY] = 1000;
 			pcisd->data[CISD_DATA_CHG_TEMP_MIN_PER_DAY] = 1000;
-			pcisd->data[CISD_DATA_WPC_TEMP_MIN_PER_DAY] = 1000;
 			pcisd->data[CISD_DATA_USB_TEMP_MIN_PER_DAY] = 1000;
 
 			pcisd->data[CISD_DATA_CHG_BATT_TEMP_MAX_PER_DAY] = -300;
+			pcisd->data[CISD_DATA_CHG_SUB_BATT_TEMP_MAX_PER_DAY] = -300;
 			pcisd->data[CISD_DATA_CHG_CHG_TEMP_MAX_PER_DAY] = -300;
-			pcisd->data[CISD_DATA_CHG_WPC_TEMP_MAX_PER_DAY] = -300;
 			pcisd->data[CISD_DATA_CHG_USB_TEMP_MAX_PER_DAY] = -300;
 			pcisd->data[CISD_DATA_CHG_BATT_TEMP_MIN_PER_DAY] = 1000;
+			pcisd->data[CISD_DATA_CHG_SUB_BATT_TEMP_MIN_PER_DAY] = 1000;
 			pcisd->data[CISD_DATA_CHG_CHG_TEMP_MIN_PER_DAY] = 1000;
-			pcisd->data[CISD_DATA_CHG_WPC_TEMP_MIN_PER_DAY] = 1000;
 			pcisd->data[CISD_DATA_CHG_USB_TEMP_MIN_PER_DAY] = 1000;
 
 			pcisd->data[CISD_DATA_CAP_MIN_PER_DAY] = 0xFFFF;
@@ -1896,6 +1918,12 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 					0);
 		}
 		break;
+	case SWITCH_CHARGING_SOURCE:
+		psy_do_property(battery->pdata->charger_name, get,
+				POWER_SUPPLY_EXT_PROP_CHANGE_CHARGING_SOURCE, value);
+		pr_info("%s Test Charging Source(%d) ",__func__, value.intval);
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n", value.intval);
+		break;
 #else
 	case DIRECT_CHARGING_STATUS:
 		ret = -1; /* DC not supported model returns -1 */
@@ -1974,7 +2002,7 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 	case GET_DT_STR:
 		if (battery->get_dt_str) {
 			struct device_node *np;
-			char * data;
+			char * data = NULL;
 			dev_info(battery->dev,"GET_DT_STR: %s\n", battery->get_dt_str);
 			np = of_find_node_with_property(NULL, battery->get_dt_str);
 			if (!np) {
@@ -2456,7 +2484,7 @@ ssize_t sec_bat_store_attrs(
 				} else if(is_hv_wire_type(battery->cable_type) ||
 					(is_pd_wire_type(battery->cable_type) &&
 					battery->pd_max_charge_power >= HV_CHARGER_STATUS_STANDARD1 &&
-					battery->hv_pdo) ||
+					battery->pdic_info.sink_status.available_pdo_num > 1) ||
 					battery->max_charge_power >= HV_CHARGER_STATUS_STANDARD1)
 					sec_bat_set_charging_current(battery);
 			} else {
@@ -2535,7 +2563,7 @@ ssize_t sec_bat_store_attrs(
 #if defined(CONFIG_STEP_CHARGING)
 	case TEST_STEP_CONDITION:
 		if (sscanf(buf, "%10d\n", &x) == 1) {
-			if (x >= 0 && x <= 100) {
+			if (x >= 0 && x <= 4500) {
 				dev_err(battery->dev,
 					"%s: TEST_STEP_CONDITION(%d)\n", __func__, x);
 				battery->test_step_condition = x;
@@ -3351,12 +3379,12 @@ ssize_t sec_bat_store_attrs(
 
 					pcisd->data[CISD_DATA_FULL_COUNT_PER_DAY] = 1;
 					pcisd->data[CISD_DATA_BATT_TEMP_MAX_PER_DAY] = -300;
+					pcisd->data[CISD_DATA_SUB_BATT_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_TEMP_MAX_PER_DAY] = -300;
-					pcisd->data[CISD_DATA_WPC_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_USB_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_BATT_TEMP_MIN_PER_DAY] = 1000;
+					pcisd->data[CISD_DATA_SUB_BATT_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_CHG_TEMP_MIN_PER_DAY] = 1000;
-					pcisd->data[CISD_DATA_WPC_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_USB_TEMP_MIN_PER_DAY] = 1000;
 
 					pcisd->data[CISD_DATA_CHG_BATT_TEMP_MAX] = -300;
@@ -3369,12 +3397,12 @@ ssize_t sec_bat_store_attrs(
 					pcisd->data[CISD_DATA_CHG_USB_TEMP_MIN] = 1000;
 
 					pcisd->data[CISD_DATA_CHG_BATT_TEMP_MAX_PER_DAY] = -300;
+					pcisd->data[CISD_DATA_CHG_SUB_BATT_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_CHG_TEMP_MAX_PER_DAY] = -300;
-					pcisd->data[CISD_DATA_CHG_WPC_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_USB_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_BATT_TEMP_MIN_PER_DAY] = 1000;
+					pcisd->data[CISD_DATA_CHG_SUB_BATT_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_CHG_CHG_TEMP_MIN_PER_DAY] = 1000;
-					pcisd->data[CISD_DATA_CHG_WPC_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_CHG_USB_TEMP_MIN_PER_DAY] = 1000;
 
 					pcisd->data[CISD_DATA_CAP_MIN_PER_DAY] = 0xFFFF;
@@ -3417,12 +3445,12 @@ ssize_t sec_bat_store_attrs(
 
 					pcisd->data[CISD_DATA_FULL_COUNT_PER_DAY] = 1;
 					pcisd->data[CISD_DATA_BATT_TEMP_MAX_PER_DAY] = -300;
+					pcisd->data[CISD_DATA_SUB_BATT_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_TEMP_MAX_PER_DAY] = -300;
-					pcisd->data[CISD_DATA_WPC_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_USB_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_BATT_TEMP_MIN_PER_DAY] = 1000;
+					pcisd->data[CISD_DATA_SUB_BATT_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_CHG_TEMP_MIN_PER_DAY] = 1000;
-					pcisd->data[CISD_DATA_WPC_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_USB_TEMP_MIN_PER_DAY] = 1000;
 
 					pcisd->data[CISD_DATA_CHG_BATT_TEMP_MAX] = -300;
@@ -3435,12 +3463,12 @@ ssize_t sec_bat_store_attrs(
 					pcisd->data[CISD_DATA_CHG_USB_TEMP_MIN] = 1000;
 
 					pcisd->data[CISD_DATA_CHG_BATT_TEMP_MAX_PER_DAY] = -300;
+					pcisd->data[CISD_DATA_CHG_SUB_BATT_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_CHG_TEMP_MAX_PER_DAY] = -300;
-					pcisd->data[CISD_DATA_CHG_WPC_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_USB_TEMP_MAX_PER_DAY] = -300;
 					pcisd->data[CISD_DATA_CHG_BATT_TEMP_MIN_PER_DAY] = 1000;
+					pcisd->data[CISD_DATA_CHG_SUB_BATT_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_CHG_CHG_TEMP_MIN_PER_DAY] = 1000;
-					pcisd->data[CISD_DATA_CHG_WPC_TEMP_MIN_PER_DAY] = 1000;
 					pcisd->data[CISD_DATA_CHG_USB_TEMP_MIN_PER_DAY] = 1000;
 
 					pcisd->data[CISD_DATA_CAP_MIN_PER_DAY] = 0xFFFF;
@@ -3743,6 +3771,18 @@ ssize_t sec_bat_store_attrs(
 	case DIRECT_CHARGING_TOTAL_STEP:
 		break;
 	case DIRECT_CHARGING_IIN:
+		break;
+	case SWITCH_CHARGING_SOURCE:
+		if (sscanf(buf, "%10d\n", &x) == 1) {
+			if (is_pd_apdo_wire_type(battery->cable_type)) {
+				dev_info(battery->dev, "%s: Request Change Charging Source : %s \n",
+					__func__, x == 0 ? "Switch Charger" : "Direct Charger" );
+
+				value.intval = (x == 0) ? SEC_DIRECT_CHG_CHARGING_SOURCE_SWITCHING : SEC_DIRECT_CHG_CHARGING_SOURCE_DIRECT;
+				psy_do_property(battery->pdata->charger_name, set,
+					POWER_SUPPLY_EXT_PROP_CHANGE_CHARGING_SOURCE, value);
+			}
+		}
 		break;
 #endif
 #endif

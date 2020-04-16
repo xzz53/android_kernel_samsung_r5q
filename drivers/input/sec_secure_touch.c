@@ -338,19 +338,20 @@ static void sec_secure_touch_hall_ic_work(struct work_struct *work)
 	mutex_lock(&data->lock);
 
 	if (data->hall_ic == SECURE_TOUCH_FOLDER_OPEN) {
-		if (data->touch_driver[SECURE_TOUCH_SUB_DEV].enabled) {
-			if (data->touch_driver[SECURE_TOUCH_SUB_DEV].is_running) {
-				schedule_delayed_work(&data->folder_work, msecs_to_jiffies(10));
-				mutex_unlock(&data->lock);
-				return;
+		if (data->touch_driver[SECURE_TOUCH_SUB_DEV].registered) {
+			if (data->touch_driver[SECURE_TOUCH_SUB_DEV].enabled) {
+				if (data->touch_driver[SECURE_TOUCH_SUB_DEV].is_running) {
+					schedule_delayed_work(&data->folder_work, msecs_to_jiffies(10));
+					mutex_unlock(&data->lock);
+					return;
+				}
+
+				sysfs_delete_link(&data->device->kobj, data->touch_driver[SECURE_TOUCH_SUB_DEV].kobj, "secure");
+				data->touch_driver[SECURE_TOUCH_SUB_DEV].enabled = 0;
+			} else {
+				pr_info("%s: %s: error: %d\n", SECLOG, __func__, __LINE__);
 			}
-
-			sysfs_delete_link(&data->device->kobj, data->touch_driver[SECURE_TOUCH_SUB_DEV].kobj, "secure");
-			data->touch_driver[SECURE_TOUCH_SUB_DEV].enabled = 0;
-		} else {
-			pr_info("%s: %s: error: %d\n", SECLOG, __func__, __LINE__);
 		}
-
 		if (data->touch_driver[SECURE_TOUCH_MAIN_DEV].registered) {
 			if (data->touch_driver[SECURE_TOUCH_MAIN_DEV].enabled == 1) {
 				pr_info("%s: %s: already created\n", SECLOG, __func__);
@@ -366,22 +367,21 @@ static void sec_secure_touch_hall_ic_work(struct work_struct *work)
 
 			pr_info("%s: %s: create link ret:%d, %s\n", SECLOG, __func__, ret, data->touch_driver[SECURE_TOUCH_MAIN_DEV].kobj->name);
 			data->touch_driver[SECURE_TOUCH_MAIN_DEV].enabled = 1;
-		} else {
-			pr_info("%s: %s: error: %d\n", SECLOG, __func__, __LINE__);
 		}
 	} else if (data->hall_ic == SECURE_TOUCH_FOLDER_CLOSE) {
-		if (data->touch_driver[SECURE_TOUCH_MAIN_DEV].enabled) {
-			if (data->touch_driver[SECURE_TOUCH_MAIN_DEV].is_running) {
-				schedule_delayed_work(&data->folder_work, msecs_to_jiffies(10));
-				mutex_unlock(&data->lock);
-				return;
+		if (data->touch_driver[SECURE_TOUCH_MAIN_DEV].registered) {
+			if (data->touch_driver[SECURE_TOUCH_MAIN_DEV].enabled) {
+				if (data->touch_driver[SECURE_TOUCH_MAIN_DEV].is_running) {
+					schedule_delayed_work(&data->folder_work, msecs_to_jiffies(10));
+					mutex_unlock(&data->lock);
+					return;
+				}
+				sysfs_delete_link(&data->device->kobj, data->touch_driver[SECURE_TOUCH_MAIN_DEV].kobj, "secure");
+				data->touch_driver[SECURE_TOUCH_MAIN_DEV].enabled = 0;
+			} else {
+				pr_info("%s: %s: error: %d\n", SECLOG, __func__, __LINE__);
 			}
-			sysfs_delete_link(&data->device->kobj, data->touch_driver[SECURE_TOUCH_MAIN_DEV].kobj, "secure");
-			data->touch_driver[SECURE_TOUCH_MAIN_DEV].enabled = 0;
-		} else {
-			pr_info("%s: %s: error: %d\n", SECLOG, __func__, __LINE__);
 		}
-
 		if (data->touch_driver[SECURE_TOUCH_SUB_DEV].registered) {
 			if (data->touch_driver[SECURE_TOUCH_SUB_DEV].enabled == 1) {
 				pr_info("%s: %s: already created\n", SECLOG, __func__);
@@ -397,8 +397,6 @@ static void sec_secure_touch_hall_ic_work(struct work_struct *work)
 
 			pr_info("%s: %s: create link ret:%d, %s\n", SECLOG, __func__, ret, data->touch_driver[SECURE_TOUCH_SUB_DEV].kobj->name);
 			data->touch_driver[SECURE_TOUCH_SUB_DEV].enabled = 1;
-		} else {
-			pr_info("%s: %s: error: %d\n", SECLOG, __func__, __LINE__);
 		}
 	} else {
 		mutex_unlock(&data->lock);

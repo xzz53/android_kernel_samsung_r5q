@@ -21,6 +21,7 @@
 #if (defined CONFIG_CCIC_NOTIFIER || defined CONFIG_DUAL_ROLE_USB_INTF)
 #include <linux/ccic/usbpd_ext.h>
 #endif
+#include "../battery_v2/include/sec_charging_common.h"
 
 #define CHECK_MSG(pd, msg, ret) do {\
 	if (pd->phy_ops.get_status(pd, msg))\
@@ -928,6 +929,7 @@ policy_state usbpd_policy_snk_startup(struct policy_data *policy)
 
 	/* PD State Inform for AP */
 	dev_info(pd_data->dev, "%s\n", __func__);
+	pd_data->phy_ops.set_rp_control(pd_data, PLUG_CTRL_RP80);
 
 	/* PD Protocol Initialization */
 	usbpd_init_protocol(pd_data);
@@ -1203,6 +1205,7 @@ policy_state usbpd_policy_snk_select_capability(struct policy_data *policy)
 policy_state usbpd_policy_snk_transition_sink(struct policy_data *policy)
 {
 	struct usbpd_data *pd_data = policy_to_usbpd(policy);
+	struct usbpd_manager_data *manager = &pd_data->manager;
 	int ret  = PE_SNK_Transition_Sink;
 	long long ms = 0;
 	bool vbus_short = 0;
@@ -1256,6 +1259,9 @@ retry:
 			/* Notify Plug Attach */
 			usbpd_manager_plug_attach(pd_data->dev, ATTACHED_DEV_TYPE3_CHARGER_MUIC);
 
+			manager->pn_flag = true;
+			complete(&manager->psrdy_wait);
+
 			ret = PE_SNK_Ready;
 			break;
 		}
@@ -1280,6 +1286,31 @@ retry:
 	}
 
 	return ret;
+}
+
+bool sec_pps_control(int en)
+{
+#if defined(CONFIG_PDIC_PD30)
+	struct usbpd_data *pd_data = pd_noti.pusbpd;
+	struct usbpd_manager_data *manager = &pd_data->manager;
+	union power_supply_propval val = {0,};
+
+	dev_info(pd_data->dev, "%s\n", __func__);
+
+	val.intval = en; /* 0: stop pps, 1: start pps */
+	psy_do_property("battery", set,
+			POWER_SUPPLY_EXT_PROP_DIRECT_SEND_UVDM, val);
+	if (!en && !manager->pn_flag) {
+		reinit_completion(&manager->psrdy_wait);
+		if (!wait_for_completion_timeout(&manager->psrdy_wait, msecs_to_jiffies(1000))) {
+			dev_info(pd_data->dev, "PSRDY COMPLETION TIMEOUT\n");
+			return false;
+		}
+	}
+	return true;
+#else
+	return true;
+#endif
 }
 
 policy_state usbpd_policy_snk_ready(struct policy_data *policy)
@@ -1840,6 +1871,7 @@ policy_state usbpd_policy_drs_dfp_ufp_accept_dr_swap(struct policy_data *policy)
 	**********************************************/
 
 	dev_info(pd_data->dev, "%s\n", __func__);
+	msleep(3);
 
 	pd_data->phy_ops.get_power_role(pd_data, &power_role);
 
@@ -1888,6 +1920,12 @@ policy_state usbpd_policy_drs_dfp_ufp_send_dr_swap(struct policy_data *policy)
 
 	dev_info(pd_data->dev, "%s\n", __func__);
 	pd_data->phy_ops.get_power_role(pd_data, &power_role);
+
+	/* when PD3.0, set sink Tx NG(RP 180uA) for Send Request Message */
+	if (power_role == USBPD_SOURCE) {
+		if(pd_data->protocol_rx.msg_header.spec_revision >= 2)
+			pd_data->phy_ops.set_rp_control(pd_data, PLUG_CTRL_RP180);
+	}
 
 	if (usbpd_send_ctrl_msg(pd_data, &policy->tx_msg_header,
 				USBPD_DR_Swap, USBPD_DFP, power_role)) {
@@ -2028,6 +2066,12 @@ policy_state usbpd_policy_drs_ufp_dfp_send_dr_swap(struct policy_data *policy)
 	dev_info(pd_data->dev, "%s\n", __func__);
 	pd_data->phy_ops.get_power_role(pd_data, &power_role);
 
+	/* when PD3.0, set sink Tx NG(RP 180uA) for Send Request Message */
+	if (power_role == USBPD_SOURCE) {
+		if(pd_data->protocol_rx.msg_header.spec_revision >= 2)
+			pd_data->phy_ops.set_rp_control(pd_data, PLUG_CTRL_RP180);
+	}
+
 	if (usbpd_send_ctrl_msg(pd_data, &policy->tx_msg_header,
 				USBPD_DR_Swap, USBPD_UFP, power_role)) {
 		usbpd_timer1_start(pd_data);
@@ -2101,7 +2145,6 @@ policy_state usbpd_policy_prs_src_snk_reject_pr_swap(struct policy_data *policy)
 
 	/* PD State Inform for AP */
 	dev_info(pd_data->dev, "%s\n", __func__);
-	
 
 	pd_data->phy_ops.get_data_role(pd_data, &data_role);
 
@@ -2150,6 +2193,10 @@ policy_state usbpd_policy_prs_src_snk_send_swap(struct policy_data *policy)
 
 	/* PD State Inform for AP */
 	dev_info(pd_data->dev, "%s\n", __func__);
+
+	/* when PD3.0, set sink Tx NG(RP 180uA) for Send Request Message */
+	if(pd_data->protocol_rx.msg_header.spec_revision >= 2)
+		pd_data->phy_ops.set_rp_control(pd_data, PLUG_CTRL_RP180);
 
 	/* Read Data Role */
 	pd_data->phy_ops.get_data_role(pd_data, &data_role);
@@ -2250,6 +2297,7 @@ policy_state usbpd_policy_prs_src_snk_transition_to_off(struct policy_data *poli
 
 	/* VBUS off */
 	pd_data->phy_ops.set_otg_control(pd_data, 0);
+	pd_data->phy_ops.set_rp_control(pd_data, PLUG_CTRL_RP80);
 
 	pr_info("%s, %d\n", __func__, manager->acc_type);
 
@@ -2322,6 +2370,9 @@ policy_state usbpd_policy_prs_src_snk_wait_source_on(struct policy_data *policy)
 		if (pd_data->phy_ops.get_status(pd_data, MSG_PSRDY)) {
 			dev_info(pd_data->dev, "got PSRDY.\n");
 			pd_data->counter.swap_hard_reset_counter = 0;
+
+			/* not receive Src_Cap, turns on snk_wait_for_caps */
+			pd_data->phy_ops.set_cc_control(pd_data, USBPD_CC_OFF);
 
 			/* Message ID Clear */
 			usbpd_init_counters(pd_data);
@@ -2478,6 +2529,7 @@ policy_state usbpd_policy_prs_snk_src_accept_swap(struct policy_data *policy)
 policy_state usbpd_policy_prs_snk_src_transition_to_off(struct policy_data *policy)
 {
 	struct usbpd_data *pd_data = policy_to_usbpd(policy);
+	struct usbpd_manager_data *manager = &pd_data->manager;
 	int ret = 0;
 	long long ms = 0;
 	/**********************************************
@@ -2504,6 +2556,7 @@ policy_state usbpd_policy_prs_snk_src_transition_to_off(struct policy_data *poli
 		ms = usbpd_check_time1(pd_data);
 		if (pd_data->phy_ops.get_status(pd_data, MSG_PSRDY)) {
 			dev_info(pd_data->dev, "got PSRDY.\n");
+			manager->pn_flag = true;
 			ret = PE_PRS_SNK_SRC_Assert_Rp;
 			break;
 		}
@@ -3771,7 +3824,7 @@ policy_state usbpd_policy_dfp_vdm_identity_request(struct policy_data *policy)
 
 				/* IF PD2.0, selfsoft reset for BIST Carrier 2 Test */
 				if(pd_data->specification_revision == USBPD_PD2_0)
-					pd_data->phy_ops.soft_reset(pd_data);				
+					pd_data->phy_ops.soft_reset(pd_data);
 			}
 			break;
 		}
@@ -3896,7 +3949,7 @@ policy_state usbpd_policy_dfp_vdm_svids_request(struct policy_data *policy)
  		}
 		if (ms >= tVDMSenderResponse)
 			break;
-	}	
+	}
 	return ret;
 }
 
@@ -3979,7 +4032,7 @@ policy_state usbpd_policy_dfp_vdm_modes_request(struct policy_data *policy)
 		}
 
 		ms = usbpd_check_time1(pd_data);
-		if (pd_data->phy_ops.get_status(pd_data, VDM_DISCOVER_MODE)) {	
+		if (pd_data->phy_ops.get_status(pd_data, VDM_DISCOVER_MODE)) {
 			if (policy->rx_data_obj[0].structured_vdm.command_type
 					== Responder_ACK)
 				ret = PE_DFP_VDM_Modes_ACKed;
@@ -4027,7 +4080,7 @@ policy_state usbpd_policy_dfp_vdm_entry_request(struct policy_data *policy)
 	struct usbpd_manager_data *manager = &pd_data->manager;
 	int power_role = 0;
 	int ret = PE_DFP_VDM_Mode_Entry_NAKed;
-	long long ms = 0;	
+	long long ms = 0;
 
 	/**********************************************
 	Actions on entry:
@@ -4078,7 +4131,7 @@ policy_state usbpd_policy_dfp_vdm_entry_request(struct policy_data *policy)
 			break;
 		}
 		if (ms >= tVDMWaitModeEntry)
-			break;		
+			break;
 	}
 	return ret;
 }
@@ -4116,7 +4169,7 @@ policy_state usbpd_policy_dfp_vdm_exit_request(struct policy_data *policy)
 	struct usbpd_data *pd_data = policy_to_usbpd(policy);
 	int power_role = 0;
 	int ret = PE_DFP_VDM_Mode_Exit_NAKed;
-	long long ms = 0;	
+	long long ms = 0;
 
 	/**********************************************
 	Actions on entry:
@@ -4360,7 +4413,7 @@ policy_state usbpd_policy_dfp_vdm_displayport_configure(struct policy_data *poli
 		}
 
 		ms = usbpd_check_time1(pd_data);
-		if (pd_data->phy_ops.get_status(pd_data, VDM_DP_CONFIGURE)) {	
+		if (pd_data->phy_ops.get_status(pd_data, VDM_DP_CONFIGURE)) {
 			if (policy->rx_data_obj[0].structured_vdm.command_type
 					== Responder_ACK)
 				ret = PE_DFP_VDM_DisplayPort_Configure_ACKed;
@@ -4970,8 +5023,9 @@ policy_state usbpd_policy_src_give_source_cap_ext(struct policy_data *policy)
 
 policy_state usbpd_policy_snk_get_source_status(struct policy_data *policy)
 {
-	struct usbpd_data *pd_data = policy_to_usbpd(policy);
 	int ret = PE_SNK_Ready;
+#if defined(CONFIG_PDIC_PD30)
+	struct usbpd_data *pd_data = policy_to_usbpd(policy);
 	int data_role = 0;
 
 	/**********************************************
@@ -4996,7 +5050,7 @@ policy_state usbpd_policy_snk_get_source_status(struct policy_data *policy)
 	Actions on exit:
 	Pass Source status/outcome to Device Policy Manager
 	**********************************************/
-
+#endif
 	return ret;
 }
 

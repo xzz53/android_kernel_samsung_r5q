@@ -696,6 +696,59 @@ static struct queue_sysfs_entry throtl_sample_time_entry = {
 #endif
 
 #ifdef CONFIG_BLK_IO_VOLUME
+
+static ssize_t queue_io_vol_stats_show(struct request_queue *q, char *page)
+{
+	ssize_t ret;
+
+	ret = sprintf(page, "\"RPRC5\":\"%u\",\"RPRC6\":\"%u\","
+			    "\"RPRC7\":\"%u\",\"RPRC8\":\"%u\","
+			    "\"RPMB4\":\"%u\",\"RPMB5\":\"%u\","
+			    "\"RPMB6\":\"%u\",\"RPMB7\":\"%u\","
+			    "\"WPRC5\":\"%u\",\"WPRC6\":\"%u\","
+			    "\"WPRC7\":\"%u\",\"WPRC8\":\"%u\","
+			    "\"WPMB4\":\"%u\",\"WPMB5\":\"%u\","
+			    "\"WPMB6\":\"%u\",\"WPMB7\":\"%u\"\n",
+			q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[0],
+			q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[1],
+			q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[2],
+			q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[3],
+			q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[0],
+			q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[1],
+			q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[2],
+			q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[3],
+			q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[0],
+			q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[1],
+			q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[2],
+			q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[3],
+			q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[0],
+			q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[1],
+			q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[2],
+			q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[3]);
+
+	q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[0] = 0;
+	q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[1] = 0;
+	q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[2] = 0;
+	q->blk_io_vol[REQ_OP_READ].peak_rqs_cnt[3] = 0;
+	q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[0] = 0;
+	q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[1] = 0;
+	q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[2] = 0;
+	q->blk_io_vol[REQ_OP_READ].peak_bytes_cnt[3] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[0] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[1] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[2] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_rqs_cnt[3] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[0] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[1] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[2] = 0;
+	q->blk_io_vol[REQ_OP_WRITE].peak_bytes_cnt[3] = 0;
+
+	return ret;
+}
+static struct queue_sysfs_entry queue_io_volume_stats_entry = {
+	.attr = {.name = "io_volume_stats", .mode = S_IRUGO | S_IWUSR },
+	.show = queue_io_vol_stats_show,
+};
 static ssize_t queue_io_vol_show(struct request_queue *q, char *page)
 {
 	/* not protect with lock (just for data monitoring) */
@@ -713,6 +766,48 @@ static struct queue_sysfs_entry queue_io_volume_entry = {
 #endif
 
 #ifdef CONFIG_BLK_TURBO_WRITE
+
+static ssize_t queue_tw_stats_show(struct request_queue *q, char *page)
+{
+	struct blk_turbo_write tw;
+	ssize_t ret;
+
+	spin_lock_irq(q->queue_lock);
+	if (!q->tw) {
+		spin_unlock_irq(q->queue_lock);
+		return -ENODEV;
+	}
+
+	tw.total_issued_mb = q->tw->total_issued_mb;
+	tw.issued_size_cnt[0] = q->tw->issued_size_cnt[0];
+	tw.issued_size_cnt[1] = q->tw->issued_size_cnt[1];
+	tw.issued_size_cnt[2] = q->tw->issued_size_cnt[2];
+	tw.issued_size_cnt[3] = q->tw->issued_size_cnt[3];
+
+	q->tw->total_issued_mb = 0;
+	q->tw->issued_size_cnt[0] = 0;
+	q->tw->issued_size_cnt[1] = 0;
+	q->tw->issued_size_cnt[2] = 0;
+	q->tw->issued_size_cnt[3] = 0;
+	spin_unlock_irq(q->queue_lock);
+
+	ret = sprintf(page, "\"TWMB\":\"%u\","
+			    "\"TWSC2\":\"%u\",\"TWSC3\":\"%u\","
+			    "\"TWSC4\":\"%u\",\"TWSC5\":\"%u\"\n",
+			tw.total_issued_mb,
+			tw.issued_size_cnt[0],
+			tw.issued_size_cnt[1],
+			tw.issued_size_cnt[2],
+			tw.issued_size_cnt[3]);
+
+	return ret;
+}
+
+static struct queue_sysfs_entry queue_tw_stats_entry = {
+	.attr = {.name = "tw_stats", .mode = S_IRUGO | S_IWUSR },
+	.show = queue_tw_stats_show,
+};
+
 static ssize_t queue_tw_state_show(struct request_queue *q, char *page)
 {
 	struct blk_turbo_write tw;
@@ -917,9 +1012,11 @@ static struct attribute *default_attrs[] = {
 	&throtl_sample_time_entry.attr,
 #endif
 #ifdef CONFIG_BLK_IO_VOLUME
+	&queue_io_volume_stats_entry.attr,
 	&queue_io_volume_entry.attr,
 #endif
 #ifdef CONFIG_BLK_TURBO_WRITE
+	&queue_tw_stats_entry.attr,
 	&queue_tw_state_entry.attr,
 	&queue_tw_up_threshold_bytes_entry.attr,
 	&queue_tw_down_threshold_bytes_entry.attr,

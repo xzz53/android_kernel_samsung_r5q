@@ -3976,7 +3976,7 @@ static void cam_ife_mgr_print_io_bufs(struct cam_packet *packet,
 			if (pf_buf_info &&
 				GET_FD_FROM_HANDLE(io_cfg[i].mem_handle[j]) ==
 				GET_FD_FROM_HANDLE(pf_buf_info)) {
-				CAM_INFO_RATE_LIMIT(CAM_ISP,
+				CAM_ERR(CAM_ISP,
 					"Found PF at port: 0x%x mem 0x%x fd: 0x%x",
 					io_cfg[i].resource_type,
 					io_cfg[i].mem_handle[j],
@@ -3985,7 +3985,7 @@ static void cam_ife_mgr_print_io_bufs(struct cam_packet *packet,
 					*mem_found = true;
 			}
 
-			CAM_INFO_RATE_LIMIT(CAM_ISP,
+			CAM_ERR(CAM_ISP,
 				"port: 0x%x f: %u format: %d dir %d",
 				io_cfg[i].resource_type,
 				io_cfg[i].fence,
@@ -4009,7 +4009,7 @@ static void cam_ife_mgr_print_io_bufs(struct cam_packet *packet,
 				continue;
 			}
 
-			CAM_INFO_RATE_LIMIT(CAM_ISP,
+			CAM_ERR(CAM_ISP,
 				"pln %d w %d h %d s %u size 0x%x addr 0x%x end_addr 0x%x offset %x memh %x",
 				j, io_cfg[i].planes[j].width,
 				io_cfg[i].planes[j].height,

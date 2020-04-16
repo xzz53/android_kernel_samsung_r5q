@@ -76,6 +76,10 @@ struct lf_stream_data {
 static struct lf_stream_data *pdata;
 
 struct autocal_data_force_update {
+#ifdef CONFIG_SEC_FACTORY
+	struct workqueue_struct *autocal_debug_wq;
+	struct work_struct work_autocal_debug;
+#endif
 	struct hrtimer rftest_timer;
 	struct work_struct work_rftest;
 	struct workqueue_struct *rftest_wq;
@@ -86,10 +90,16 @@ struct autocal_data_force_update {
 	int32_t min_angle;
 	int32_t max_angle;
 	int32_t init_angle;
-	short rftest_work_check;
 	short rftest_timer_enabled;
 };
 static struct autocal_data_force_update *auto_cal_data;
+
+#ifdef CONFIG_SEC_FACTORY
+void autocal_debug_work_func(struct work_struct *work)
+{
+	adsp_unicast(NULL, 0, MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_SET_CAL_DATA);
+}
+#endif
 
 static enum hrtimer_restart rftest_timer_func(struct hrtimer *timer)
 {
@@ -518,6 +528,7 @@ static ssize_t check_auto_cal_show(struct device *dev,
 
 	pr_info("[FACTORY] %s\n", __func__);
 
+	/* Try to backup auto cal table */
 	adsp_unicast(NULL, 0, MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_GET_CAL_DATA);
 
 	while (!(data->ready_flag[MSG_TYPE_GET_CAL_DATA] & 1 << MSG_DIGITAL_HALL_ANGLE) &&
@@ -542,8 +553,83 @@ static ssize_t check_auto_cal_show(struct device *dev,
 		memcpy(auto_cal_data->ref_z, &data->msg_buf[MSG_DIGITAL_HALL_ANGLE][39], sizeof(int32_t) * 19);
 		set_auto_cal_data_forced(false);
 	}
-		
+
+#ifdef CONFIG_SEC_FACTORY
+	/* Print mx, my, mz buffer in SSC_DAEMON log */
+	adsp_unicast(NULL, 0, MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_SET_CAL_DATA);
+#endif
 	return snprintf(buf, PAGE_SIZE, "%d\n", auto_cal_data->flg_update);
+}
+
+static ssize_t backup_restore_auto_cal_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct adsp_data *data = dev_get_drvdata(dev);
+	int new_value;
+	int32_t auto_cal_buf[58] = { 0, };
+	uint8_t cnt = 0;
+
+	if (sysfs_streq(buf, "0"))
+		new_value = 0;
+	else if (sysfs_streq(buf, "1"))
+		new_value = 1;
+	else
+		return size;
+
+	pr_info("[FACTORY] %s: new_value %d\n", __func__, new_value);
+
+	if (new_value) {
+		adsp_unicast(NULL, 0, MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_GET_CAL_DATA);
+
+		while (!(data->ready_flag[MSG_TYPE_GET_CAL_DATA] & 1 << MSG_DIGITAL_HALL_ANGLE) &&
+			cnt++ < 3)
+			msleep(30);
+
+		data->ready_flag[MSG_TYPE_GET_CAL_DATA] &= ~(1 << MSG_DIGITAL_HALL_ANGLE);
+
+		if (cnt >= 3) {
+			pr_err("[FACTORY] %s: Timeout!!!\n", __func__);
+			return size;
+		}
+
+		pr_info("[FACTORY] %s: flg_update=%d\n", __func__, data->msg_buf[MSG_DIGITAL_HALL_ANGLE][0]);
+
+		if (!data->msg_buf[MSG_DIGITAL_HALL_ANGLE][0])
+			return size;
+
+		auto_cal_data->flg_update = data->msg_buf[MSG_DIGITAL_HALL_ANGLE][0];
+		memcpy(auto_cal_data->ref_x, &data->msg_buf[MSG_DIGITAL_HALL_ANGLE][1], sizeof(int32_t) * 19);
+		memcpy(auto_cal_data->ref_y, &data->msg_buf[MSG_DIGITAL_HALL_ANGLE][20], sizeof(int32_t) * 19);
+		memcpy(auto_cal_data->ref_z, &data->msg_buf[MSG_DIGITAL_HALL_ANGLE][39], sizeof(int32_t) * 19);
+
+		pr_info("[FACTORY] %s: backup auto_cal\n", __func__);
+		pr_info("[FACTORY] %s: %d/%d/%d/%d\n", __func__,
+			auto_cal_data->flg_update, auto_cal_data->ref_x[18],
+			auto_cal_data->ref_y[18], auto_cal_data->ref_z[18]);
+		set_auto_cal_data_forced(false);
+#ifdef CONFIG_SEC_FACTORY
+		queue_work(auto_cal_data->autocal_debug_wq,
+			&auto_cal_data->work_autocal_debug);
+#endif
+	} else {
+		if (auto_cal_data->flg_update == 0) {
+			pr_info("[FACTORY] %s: flg_update is zero\n", __func__);
+			return size;
+		}
+		auto_cal_buf[0] = auto_cal_data->flg_update;
+		memcpy(&auto_cal_buf[1], auto_cal_data->ref_x, sizeof(int32_t) * 19);
+		memcpy(&auto_cal_buf[20], auto_cal_data->ref_y, sizeof(int32_t) * 19);
+		memcpy(&auto_cal_buf[39], auto_cal_data->ref_z, sizeof(int32_t) * 19);
+
+		pr_info("[FACTORY] %s: restore auto_cal\n", __func__);
+		pr_info("[FACTORY] %s: %d/%d/%d/%d\n", __func__,
+			auto_cal_buf[0], auto_cal_buf[1],
+			auto_cal_buf[20], auto_cal_buf[39]);
+		adsp_unicast(auto_cal_buf, sizeof(auto_cal_buf),
+			MSG_DIGITAL_HALL_ANGLE, 0, MSG_TYPE_SET_REGISTER);
+	}
+
+	return size;
 }
 
 static ssize_t rf_test_show(struct device *dev,
@@ -972,6 +1058,8 @@ static DEVICE_ATTR(test_read, 0660,
 	digital_hall_test_read_show, digital_hall_test_read_store);
 static DEVICE_ATTR(reset_auto_cal, 0440, reset_auto_cal_show, NULL);
 static DEVICE_ATTR(check_auto_cal, 0440, check_auto_cal_show, NULL);
+static DEVICE_ATTR(backup_restore_auto_cal, 0220,
+	NULL, backup_restore_auto_cal_store);
 static DEVICE_ATTR(lf_stream_reset_auto_cal, 0440,
 	lf_stream_reset_auto_cal_show, NULL);
 static DEVICE_ATTR(lf_stream_auto_cal, 0660,
@@ -989,6 +1077,7 @@ static struct device_attribute *digital_hall_attrs[] = {
 	&dev_attr_test_read,
 	&dev_attr_reset_auto_cal,
 	&dev_attr_check_auto_cal,
+	&dev_attr_backup_restore_auto_cal,
 	&dev_attr_lf_stream_auto_cal,
 	&dev_attr_lf_stream_reset_auto_cal,
 	&dev_attr_rf_test,
@@ -1011,9 +1100,17 @@ static int __init ak09970_factory_init(void)
 	auto_cal_data->init_angle = 0;
 	auto_cal_data->min_angle = 180;
 	auto_cal_data->max_angle = 0;
-	auto_cal_data->rftest_work_check = 0;
 	auto_cal_data->rftest_timer_enabled = 0;
 
+#ifdef CONFIG_SEC_FACTORY
+	auto_cal_data->autocal_debug_wq =
+		create_singlethread_workqueue("autocal_dbg_wq");
+	if (auto_cal_data->autocal_debug_wq == NULL) {
+		pr_err("[FACTORY]: %s - could not create autocal_dbg_wq",
+			__func__);
+	}
+	INIT_WORK(&auto_cal_data->work_autocal_debug, autocal_debug_work_func);
+#endif
 	pr_info("[FACTORY] %s\n", __func__);
 
 	return 0;
@@ -1027,9 +1124,15 @@ static void __exit ak09970_factory_exit(void)
 	}
 	destroy_workqueue(auto_cal_data->rftest_wq);
 
+#ifdef CONFIG_SEC_FACTORY
+	if (auto_cal_data->autocal_debug_wq)
+		destroy_workqueue(auto_cal_data->autocal_debug_wq);
+#endif
 	adsp_factory_unregister(MSG_DIGITAL_HALL);
-	kfree(pdata);
-	kfree(auto_cal_data);
+	if (pdata)
+		kfree(pdata);
+	if (auto_cal_data)
+		kfree(auto_cal_data);
 
 	pr_info("[FACTORY] %s\n", __func__);
 }

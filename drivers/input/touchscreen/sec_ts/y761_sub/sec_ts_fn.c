@@ -694,7 +694,7 @@ static ssize_t get_lp_dump(struct device *dev, struct device_attribute *attr, ch
 {
 	struct sec_cmd_data *sec = dev_get_drvdata(dev);
 	struct sec_ts_data *ts;
-	u8 string_data[10] = {0, };
+	u8 string_data[SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_LENGTH] = {0, };
 	u16 current_index;
 	u8 dump_format, dump_num;
 	u16 dump_start, dump_end;
@@ -740,6 +740,15 @@ static ssize_t get_lp_dump(struct device *dev, struct device_attribute *attr, ch
 	dump_start = SEC_TS_CMD_SPONGE_LP_DUMP + 4;
 	dump_end = dump_start + (dump_format * (dump_num - 1));
 
+	if (dump_format > SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_LENGTH) {
+		input_err(true, &ts->client->dev,
+				"%s: abnormal data:0x%X, 0x%X\n", __func__, string_data[0], string_data[1]);
+		if (buf)
+			snprintf(buf, SEC_CMD_BUF_SIZE,
+					"NG, Failed to read from dump format");
+		goto read_buf;
+	}
+
 	current_index = (string_data[3] & 0xFF) << 8 | (string_data[2] & 0xFF);
 	if (current_index > dump_end || current_index < dump_start) {
 		input_err(true, &ts->client->dev,
@@ -780,7 +789,7 @@ static ssize_t get_lp_dump(struct device *dev, struct device_attribute *attr, ch
 			goto read_buf;
 		}
 
-		for (j = 0; j < 10; j++)
+		for (j = 0; j < SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_LENGTH; j++)
 			value += string_data[j];
 
 		if (value == 0)
@@ -789,7 +798,7 @@ static ssize_t get_lp_dump(struct device *dev, struct device_attribute *attr, ch
 		ts->lp_dump[ts->lp_dump_index] = (string_addr >> 8) & 0xFF;
 		ts->lp_dump[ts->lp_dump_index + 1] = string_addr & 0xFF;
 
-		for (j = 0; j < 10; j += 2) {
+		for (j = 0; j < SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_LENGTH; j += 2) {
 			ts->lp_dump[ts->lp_dump_index + 2 + j] = string_data[j + 1];
 			ts->lp_dump[ts->lp_dump_index + 2 + j + 1] = string_data[j];
 		}
@@ -816,7 +825,7 @@ read_buf:
 			snprintf(buffer, sizeof(buffer), "%d: ", ts->lp_dump[pos] << 8 | ts->lp_dump[pos + 1]);
 			strlcat(buf, buffer, PAGE_SIZE);
 			memset(buffer, 0x00, sizeof(buffer));
-			for (j = 0; j < 10; j++) {
+			for (j = 0; j < SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_LENGTH; j++) {
 				snprintf(buffer, sizeof(buffer), "%02x", ts->lp_dump[pos + 2 + j]);
 				strlcat(buf, buffer, PAGE_SIZE);
 				memset(buffer, 0x00, sizeof(buffer));
@@ -1615,6 +1624,15 @@ static void fw_update(void *device_data)
 	int retval = 0;
 
 	sec_cmd_set_default_result(sec);
+#if defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+	if (sec->cmd_param[0] == 1) {
+		input_err(true, &ts->client->dev, "%s: user_ship, skip\n", __func__);
+		snprintf(buff, sizeof(buff), "OK");
+		sec_cmd_set_cmd_result(sec, buff, strnlen(buff, sizeof(buff)));
+		sec->cmd_state = SEC_CMD_STATUS_OK;
+		return;
+	}
+#endif
 	if (ts->power_status == SEC_TS_STATE_POWER_OFF) {
 		input_err(true, &ts->client->dev, "%s: [ERROR] Touch is stopped\n",
 				__func__);
@@ -4681,6 +4699,7 @@ static void run_trx_short_test(void *device_data)
 {
 	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
 	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
+	struct sec_ts_test_mode mode;
 	/* fix length: if all channel failed, can occur overflow */
 	char buff[1024 + 256] = {0};
 	char tempn[40] = {0};
@@ -4700,6 +4719,7 @@ static void run_trx_short_test(void *device_data)
 	char test[32];
 	char result[32];
 	u64 temp_result;
+	int elvss_cap = 0;
 
 	sec_cmd_set_default_result(sec);
 
@@ -4876,6 +4896,23 @@ static void run_trx_short_test(void *device_data)
 	for (ii = start_point ; ii < checklen; ii++)
 		sum += data[ii];
 
+	if (sec->cmd_param[0] == BRIDGE_SHORT_TEST) {
+		memset(&mode, 0x00, sizeof(struct sec_ts_test_mode));
+		mode.type = TYPE_RAW_DATA;
+		mode.frame_channel = TEST_MODE_READ_CHANNEL;
+
+		sec_ts_read_raw_data(ts, NULL, &mode);
+
+		if (mode.min < -5000)
+			elvss_cap = 1; /* fail */
+		else
+			elvss_cap = 0; /* pass */
+
+		input_info(true, &ts->client->dev, "elvss_cap %s\n", elvss_cap ? "FAIL" : "PASS");
+
+		sum += elvss_cap;
+	}
+
 	if (!sum)
 		goto test_ok;
 
@@ -4885,7 +4922,7 @@ static void run_trx_short_test(void *device_data)
 		long long lldata = 0;
 
 		memcpy(&lldata, &data[ii], 8);
-		if (!lldata)
+		if (!lldata && !elvss_cap)
 			continue;
 
 		memset(tempn, 0x00, 40);
@@ -4902,7 +4939,14 @@ static void run_trx_short_test(void *device_data)
 		} else if (sec->cmd_param[0] == CRACK_TEST) {
 			snprintf(tempn, 40, " CRACK:");
 		} else if (sec->cmd_param[0] == BRIDGE_SHORT_TEST) {
-			snprintf(tempn, 40, "BRIDGE_SHORT:");
+			if (elvss_cap == 1) {
+				snprintf(tempn, 40, " ELVSS_CAP:FAIL");
+				strlcat(buff, tempn, sizeof(buff));
+			}
+			if (sum - elvss_cap)
+				snprintf(tempn, 40, " BRIDGE_SHORT:");
+			else /* only ELVSS_CAP failed */
+				snprintf(tempn, 40, "");
 		}
 		strlcat(buff, tempn, sizeof(buff));
 		memcpy(&temp_result, &data[ii], 8);

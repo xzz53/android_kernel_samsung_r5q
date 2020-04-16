@@ -57,6 +57,7 @@ struct a96t3x6_data {
 	struct mutex lock;
 	struct delayed_work debug_work;
 	struct delayed_work firmware_work;
+	struct delayed_work notify_work;
 
 	atomic_t enable;
 
@@ -297,6 +298,9 @@ static void a96t3x6_set_enable(struct a96t3x6_data *data, int enable)
 
 static void a96t3x6_sar_only_mode(struct a96t3x6_data *data, int on)
 {
+#ifdef CONFIG_SENSORS_A96T3X6_BLOCK_SAR_ONLY
+	GRIP_INFO("No action with sar only mode");
+#else
 	int ret;
 	u8 cmd;
 	u8 r_buf;
@@ -330,6 +334,7 @@ static void a96t3x6_sar_only_mode(struct a96t3x6_data *data, int on)
 		else
 			data->sar_mode = 0;
 	}
+#endif
 }
 
 static void grip_always_active(struct a96t3x6_data *data, int on)
@@ -681,6 +686,18 @@ static void a96t3x6_set_firmware_work(struct a96t3x6_data *data, u8 enable,
 	}
 }
 #endif
+static void a96t3x6_set_notify_work(struct a96t3x6_data *data, u8 enable,
+	unsigned int time_ms)
+{
+	GRIP_INFO("%s\n", __func__, enable ? "enabled": "disabled");
+	
+	if (enable == 1) {
+		schedule_delayed_work(&data->notify_work,
+			msecs_to_jiffies(time_ms));
+	} else {
+		cancel_delayed_work_sync(&data->notify_work);
+	}
+}
 static irqreturn_t a96t3x6_interrupt(int irq, void *dev_id)
 {
 	struct a96t3x6_data *data = dev_id;
@@ -2536,8 +2553,14 @@ static int a96t3x6_power_onoff(void *pdata, bool on)
 				data->dvdd_vreg = NULL;
 				GRIP_ERR("failed to get dvdd_vreg %s\n", data->dvdd_vreg_name);
 			}
+#ifdef CONFIG_SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+			ret = regulator_set_voltage(data->dvdd_vreg, 1600000, 1600000);
+			if (ret) {
+				GRIP_ERR("failed to set voltage %d\n", ret);
+			}
+#endif
 		}
-	}		
+	}
 
 	if (data->dvdd_vreg) {
 		voltage = regulator_get_voltage(data->dvdd_vreg);
@@ -2739,7 +2762,21 @@ static int a96t3x6_cpuidle_muic_notifier(struct notifier_block *nb,
 	return NOTIFY_DONE;
 }
 #endif
+static void a96t3x6_notify_work_func(struct work_struct *work)
+{
+	struct a96t3x6_data *data = container_of((struct delayed_work *)work,
+		struct a96t3x6_data, notify_work);
 
+	GRIP_INFO("called\n");
+
+#if defined(CONFIG_USB_TYPEC_MANAGER_NOTIFIER) && defined(CONFIG_CCIC_NOTIFIER)
+	manager_notifier_register(&data->cpuidle_ccic_nb,
+		a96t3x6_ccic_handle_notification, MANAGER_NOTIFY_CCIC_BATTERY);
+#elif defined(CONFIG_MUIC_NOTIFIER)
+	muic_notifier_register(&data->cpuidle_muic_nb,
+		a96t3x6_cpuidle_muic_notifier, MUIC_NOTIFY_DEV_CPUIDLE);
+#endif
+}
 static int a96t3x6_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
@@ -2833,6 +2870,8 @@ static int a96t3x6_probe(struct i2c_client *client,
 #ifdef CONFIG_SENSORS_FW_VENDOR	
 	INIT_DELAYED_WORK(&data->firmware_work, a96t3x6_firmware_work_func);
 #endif
+	INIT_DELAYED_WORK(&data->notify_work, a96t3x6_notify_work_func);
+
 	ret = input_register_device(input_dev);
 	if (ret) {
 		GRIP_ERR("failed to register input dev (%d)\n",
@@ -2879,14 +2918,7 @@ static int a96t3x6_probe(struct i2c_client *client,
 #ifdef CONFIG_SENSORS_FW_VENDOR
 	a96t3x6_set_firmware_work(data, 1, 1);
 #endif
-
-#if defined(CONFIG_USB_TYPEC_MANAGER_NOTIFIER) && defined(CONFIG_CCIC_NOTIFIER)
-	manager_notifier_register(&data->cpuidle_ccic_nb,
-		a96t3x6_ccic_handle_notification, MANAGER_NOTIFY_CCIC_BATTERY);
-#elif defined(CONFIG_MUIC_NOTIFIER)
-	muic_notifier_register(&data->cpuidle_muic_nb,
-		a96t3x6_cpuidle_muic_notifier, MUIC_NOTIFY_DEV_CPUIDLE);
-#endif
+	a96t3x6_set_notify_work(data, 1, 2000);
 
 	GRIP_INFO("done\n");
 	data->probe_done = true;
@@ -2907,6 +2939,10 @@ err_reg_input_dev:
 	gpio_free(data->grip_int);
 	if (data->power)
 		data->power(data, false);
+#ifdef CONFIG_SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+	/* free ldo */
+	regulator_put(data->dvdd_vreg);
+#endif
 pwr_config:
 err_config:
 	wake_lock_destroy(&data->grip_wake_lock);
@@ -2930,6 +2966,8 @@ static int a96t3x6_remove(struct i2c_client *client)
 #ifdef CONFIG_SENSORS_FW_VENDOR
 	cancel_delayed_work_sync(&data->firmware_work);
 #endif
+	cancel_delayed_work_sync(&data->notify_work);
+
 	if (data->irq >= 0)
 		free_irq(data->irq, data);
 	sensors_unregister(data->dev, grip_sensor_attributes);

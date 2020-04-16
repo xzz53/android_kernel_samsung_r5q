@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD), Linux-specific network interface
  * Basically selected code segments from usb-cdc.c and usb-rndis.c
  *
- * Copyright (C) 1999-2019, Broadcom.
+ * Copyright (C) 1999-2020, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux.c 848794 2019-11-05 02:27:28Z $
+ * $Id: dhd_linux.c 860004 2020-01-20 02:39:12Z $
  */
 
 #include <typedefs.h>
@@ -3097,7 +3097,8 @@ dhd_set_mac_address(struct net_device *dev, void *addr)
 			return ret;
 		}
 #endif /* WL_STATIC_IF */
-		 return _dhd_set_mac_address(dhd, ifidx, dhdif->mac_addr);
+		wl_cfg80211_handle_macaddr_change(dev, dhdif->mac_addr);
+		return _dhd_set_mac_address(dhd, ifidx, dhdif->mac_addr);
 	}
 #endif /* WL_CFG80211 */
 
@@ -6781,9 +6782,6 @@ dhd_stop(struct net_device *net)
 			if ((dhd->dhd_state & DHD_ATTACH_STATE_ADD_IF) &&
 				(dhd->dhd_state & DHD_ATTACH_STATE_CFG80211)) {
 				int i;
-#ifdef WL_CFG80211_P2P_DEV_IF
-				wl_cfg80211_del_p2p_wdev(net);
-#endif /* WL_CFG80211_P2P_DEV_IF */
 #ifdef DHD_4WAYM4_FAIL_DISCONNECT
 				dhd_cleanup_m4_state_work(&dhd->pub, ifidx);
 #endif /* DHD_4WAYM4_FAIL_DISCONNECT */
@@ -11136,7 +11134,9 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 		dhd->pktfilter[DHD_LLC_STP_DROP_FILTER_NUM] = DISCARD_LLC_STP;
 		/* Immediately pkt filter TYPE 6 Dicard Cisco XID protocol */
 		dhd->pktfilter[DHD_LLC_XID_DROP_FILTER_NUM] = DISCARD_LLC_XID;
-		dhd->pktfilter_count = 10;
+		/* Immediately pkt filter TYPE 6 Dicard NETBIOS packet(port 137) */
+		dhd->pktfilter[DHD_UDPNETBIOS_DROP_FILTER_NUM] = DISCARD_UDPNETBIOS;
+		dhd->pktfilter_count = 11;
 	}
 
 #ifdef GAN_LITE_NAT_KEEPALIVE_FILTER
@@ -15303,6 +15303,9 @@ void dhd_host_recover_link(void)
 EXPORT_SYMBOL(dhd_host_recover_link);
 #endif /* EXYNOS_PCIE_LINKDOWN_RECOVERY */
 
+#ifdef DHD_DETECT_CONSECUTIVE_MFG_HANG
+#define MAX_CONSECUTIVE_MFG_HANG_COUNT 2
+#endif /* DHD_DETECT_CONSECUTIVE_MFG_HANG */
 int dhd_os_send_hang_message(dhd_pub_t *dhdp)
 {
 	int ret = 0;
@@ -15357,6 +15360,16 @@ int dhd_os_send_hang_message(dhd_pub_t *dhdp)
 #endif /* DHD_HANG_SEND_UP_TEST */
 
 	if (!dhdp->hang_was_sent) {
+#ifdef DHD_DETECT_CONSECUTIVE_MFG_HANG
+		if (dhdp->op_mode & DHD_FLAG_MFG_MODE) {
+			dhdp->hang_count++;
+			if (dhdp->hang_count >= MAX_CONSECUTIVE_MFG_HANG_COUNT) {
+				DHD_ERROR(("%s, Consecutive hang from Dongle :%u\n",
+					__FUNCTION__, dhdp->hang_count));
+				BUG_ON(1);
+			}
+		}
+#endif /* DHD_DETECT_CONSECUTIVE_MFG_HANG */
 #ifdef DHD_DEBUG_UART
 		/* If PCIe lane has broken, execute the debug uart application
 		 * to gether a ramdump data from dongle via uart
@@ -16297,6 +16310,18 @@ dhd_txfl_wake_lock_timeout(dhd_pub_t *pub, int val)
 #endif /* CONFIG_HAS_WAKE_LOCK */
 }
 
+void
+dhd_nan_wake_lock_timeout(dhd_pub_t *pub, int val)
+{
+#ifdef CONFIG_HAS_WAKELOCK
+	dhd_info_t *dhd = (dhd_info_t *)(pub->info);
+
+	if (dhd) {
+		wake_lock_timeout(&dhd->wl_nanwake, msecs_to_jiffies(val));
+	}
+#endif /* CONFIG_HAS_WAKE_LOCK */
+}
+
 int net_os_wake_lock(struct net_device *dev)
 {
 	dhd_info_t *dhd = DHD_DEV_INFO(dev);
@@ -16379,6 +16404,20 @@ void dhd_txfl_wake_unlock(dhd_pub_t *pub)
 #endif /* CONFIG_HAS_WAKELOCK */
 }
 
+void dhd_nan_wake_unlock(dhd_pub_t *pub)
+{
+#ifdef CONFIG_HAS_WAKELOCK
+	dhd_info_t *dhd = (dhd_info_t *)(pub->info);
+
+	if (dhd) {
+		/* if wl_nanwake is active, unlock it */
+		if (wake_lock_active(&dhd->wl_nanwake)) {
+			wake_unlock(&dhd->wl_nanwake);
+		}
+	}
+#endif /* CONFIG_HAS_WAKELOCK */
+}
+
 int dhd_os_check_wakelock(dhd_pub_t *pub)
 {
 #if defined(CONFIG_HAS_WAKELOCK) || defined(BCMSDIO)
@@ -16406,7 +16445,7 @@ dhd_os_check_wakelock_all(dhd_pub_t *pub)
 {
 #if defined(CONFIG_HAS_WAKELOCK) || defined(BCMSDIO)
 #if defined(CONFIG_HAS_WAKELOCK)
-	int l1, l2, l3, l4, l7, l8, l9;
+	int l1, l2, l3, l4, l7, l8, l9, l10;
 	int l5 = 0, l6 = 0;
 	int c, lock_active;
 #endif /* CONFIG_HAS_WAKELOCK */
@@ -16436,13 +16475,14 @@ dhd_os_check_wakelock_all(dhd_pub_t *pub)
 #endif /* DHD_USE_SCAN_WAKELOCK */
 	l8 = wake_lock_active(&dhd->wl_pmwake);
 	l9 = wake_lock_active(&dhd->wl_txflwake);
-	lock_active = (l1 || l2 || l3 || l4 || l5 || l6 || l7 || l8 || l9);
+	l10 = wake_lock_active(&dhd->wl_nanwake);
+	lock_active = (l1 || l2 || l3 || l4 || l5 || l6 || l7 || l8 || l9 || l10);
 
 	/* Indicate to the Host to avoid going to suspend if internal locks are up */
 	if (lock_active) {
 		DHD_ERROR(("%s wakelock c-%d wl-%d wd-%d rx-%d "
-			"ctl-%d intr-%d scan-%d evt-%d, pm-%d, txfl-%d\n",
-			__FUNCTION__, c, l1, l2, l3, l4, l5, l6, l7, l8, l9));
+			"ctl-%d intr-%d scan-%d evt-%d, pm-%d, txfl-%d nan-%d\n",
+			__FUNCTION__, c, l1, l2, l3, l4, l5, l6, l7, l8, l9, l10));
 		return 1;
 	}
 #elif defined(BCMSDIO)
@@ -16660,6 +16700,7 @@ void dhd_os_wake_lock_init(struct dhd_info *dhd)
 #ifdef DHD_USE_SCAN_WAKELOCK
 	wake_lock_init(&dhd->wl_scanwake, WAKE_LOCK_SUSPEND, "wlan_scan_wake");
 #endif /* DHD_USE_SCAN_WAKELOCK */
+	wake_lock_init(&dhd->wl_nanwake, WAKE_LOCK_SUSPEND, "wlan_nan_wake");
 #endif /* CONFIG_HAS_WAKELOCK */
 #ifdef DHD_TRACE_WAKE_LOCK
 	dhd_wk_lock_trace_init(dhd);
@@ -16685,6 +16726,7 @@ void dhd_os_wake_lock_destroy(struct dhd_info *dhd)
 #ifdef DHD_USE_SCAN_WAKELOCK
 	wake_lock_destroy(&dhd->wl_scanwake);
 #endif /* DHD_USE_SCAN_WAKELOCK */
+	wake_lock_destroy(&dhd->wl_nanwake);
 #ifdef DHD_TRACE_WAKE_LOCK
 	dhd_wk_lock_trace_deinit(dhd);
 #endif /* DHD_TRACE_WAKE_LOCK */
@@ -17611,7 +17653,12 @@ dhd_print_buf_addr(dhd_pub_t *dhdp, char *name, void *buf, unsigned int size)
 {
 	if ((dhdp->memdump_enabled == DUMP_MEMONLY) ||
 		(dhdp->memdump_enabled == DUMP_MEMFILE_BUGON) ||
-		(dhdp->memdump_type == DUMP_TYPE_SMMU_FAULT)) {
+		(dhdp->memdump_type == DUMP_TYPE_SMMU_FAULT) ||
+#ifdef DHD_DETECT_CONSECUTIVE_MFG_HANG
+		(dhdp->op_mode & DHD_FLAG_MFG_MODE &&
+			(dhdp->hang_count >= MAX_CONSECUTIVE_MFG_HANG_COUNT-1)) ||
+#endif /* DHD_DETECT_CONSECUTIVE_MFG_HANG */
+		FALSE) {
 #if defined(CONFIG_ARM64)
 		DHD_ERROR(("-------- %s: buf(va)=%llx, buf(pa)=%llx, bufsize=%d\n",
 			name, (uint64)buf, (uint64)__virt_to_phys((ulong)buf), size));
@@ -17965,7 +18012,7 @@ dhd_get_dhd_dump_len(void *ndev, dhd_pub_t *dhdp)
 		length += (uint32)(CONCISE_DUMP_BUFLEN - remain_len);
 	}
 
-	length += (strlen(DHD_DUMP_LOG_HDR) + sizeof(sec_hdr));
+	length += (uint32)(strlen(DHD_DUMP_LOG_HDR) + sizeof(sec_hdr));
 	return length;
 }
 

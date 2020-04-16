@@ -3443,6 +3443,7 @@ static ssize_t ss_disp_flash_gamma_show(struct device *dev,
 {
 	struct samsung_display_driver_data *vdd =
 			(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+	int wait_cnt = 0;
 	int res = READ_FAIL_NOT_LOADING;
 	int len = 0;
 
@@ -3456,19 +3457,35 @@ static ssize_t ss_disp_flash_gamma_show(struct device *dev,
 		goto end;
 	}
 
-	res = flash_gamma_mode_check(vdd);
+	while (!vdd->panel_br_info.flash_data.init_done) {
+		wait_cnt++;
 
-end:
-	len = snprintf(buf, MAX_FLASH_GAMMA_LEN, "%d %08x %08x %08x %08x %08x\n",
+		LCD_ERR("init_done %d, wait 100ms.. %d\n", vdd->panel_br_info.flash_data.init_done, wait_cnt);
+		usleep_range(100*1000, 100*1000);
+
+		if (wait_cnt >= 5)
+			break;
+	}
+
+	/* 1st line: mode count : 8150 not has vrr yet. so it always 1 until now.*/
+	len += snprintf(buf + len, MAX_FLASH_GAMMA_LEN, "1\n");
+
+	/* If 8150 have vrr, need "for sentence" to print for each modes+++ */
+	res = flash_gamma_mode_check(vdd);
+	if (res != READING_OPERATION_DONE)
+		LCD_ERR("res:%d, Not yet done.. Try 1 more time.%d\n", res);
+
+	len = snprintf(buf + len, MAX_FLASH_GAMMA_LEN, "%d %08x %08x %08x %08x %08x\n",
 			res,
 			vdd->panel_br_info.flash_data.check_sum_cal_data,
 			vdd->panel_br_info.flash_data.check_sum_flash_data,
 			vdd->panel_br_info.flash_data.c8_register.check_sum_mtp_data,
 			vdd->panel_br_info.flash_data.c8_register.check_sum_cal_data,
 			vdd->panel_br_info.flash_data.c8_register.check_sum_flash_data);
+	/* If 8150 have vrr, need "for sentence" to print for each modes--- */
 
 	LCD_INFO("%s", buf);
-
+end:
 	return len;
 }
 
@@ -4141,6 +4158,30 @@ end:
 	return size;
 }
 
+static ssize_t ss_force_white_flush_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct samsung_display_driver_data *vdd =
+		(struct samsung_display_driver_data *)dev_get_drvdata(dev);
+	int input = 0;
+
+	if (IS_ERR_OR_NULL(vdd)) {
+		LCD_ERR("no vdd");
+		goto end;
+	}
+
+	if (sscanf(buf, "%d", &input) != 1) {
+		LCD_ERR("size error\n");
+		return size;
+	}
+
+	LCD_INFO("force white = %d\n", input);
+
+	vdd->force_white_flush = input;		
+end:
+	return size;
+}
+
 static DEVICE_ATTR(lcd_type, S_IRUGO, ss_disp_lcdtype_show, NULL);
 static DEVICE_ATTR(cell_id, S_IRUGO, ss_disp_cell_id_show, NULL);
 static DEVICE_ATTR(octa_id, S_IRUGO, ss_disp_octa_id_show, NULL);
@@ -4184,6 +4225,7 @@ static DEVICE_ATTR(SVC_OCTA, S_IRUGO, ss_disp_SVC_OCTA_show, NULL);
 static DEVICE_ATTR(SVC_OCTA2, S_IRUGO, ss_disp_SVC_OCTA2_show, NULL);
 static DEVICE_ATTR(SVC_OCTA_CHIPID, S_IRUGO, ss_disp_SVC_OCTA_CHIPID_show, NULL);
 static DEVICE_ATTR(SVC_OCTA2_CHIPID, S_IRUGO, ss_disp_SVC_OCTA2_CHIPID_show, NULL);
+static DEVICE_ATTR(SVC_OCTA_DDI_CHIPID, S_IRUGO, ss_disp_manufacture_code_show, NULL);
 static DEVICE_ATTR(esd_check, S_IRUGO, mipi_samsung_esd_check_show, NULL);
 static DEVICE_ATTR(rf_info, S_IRUGO | S_IWUSR | S_IWGRP, ss_rf_info_show, ss_rf_info_store);
 static DEVICE_ATTR(dynamic_freq, S_IRUGO | S_IWUSR | S_IWGRP, ss_dynamic_freq_show, ss_dynamic_freq_store);
@@ -4212,6 +4254,7 @@ static DEVICE_ATTR(partial_disp, S_IRUGO | S_IWUSR | S_IWGRP, ss_partial_disp_sh
 static DEVICE_ATTR(dia, S_IRUGO | S_IWUSR | S_IWGRP, NULL, ss_dia_store);
 static DEVICE_ATTR(fp_green_circle, S_IRUGO | S_IWUSR | S_IWGRP, NULL, ss_fp_green_circle_store);
 static DEVICE_ATTR(window_color, S_IRUGO | S_IWUSR | S_IWGRP, ss_window_color_show, ss_window_color_store);
+static DEVICE_ATTR(force_white, S_IRUGO | S_IWUSR | S_IWGRP, NULL, ss_force_white_flush_store);
 
 /* SAMSUNG_FINGERPRINT */
 static DEVICE_ATTR(mask_brightness, S_IRUGO | S_IWUSR | S_IWGRP, NULL, ss_finger_hbm_store);
@@ -4258,6 +4301,7 @@ static struct attribute *panel_sysfs_attributes[] = {
 	&dev_attr_SVC_OCTA2.attr,
 	&dev_attr_SVC_OCTA_CHIPID.attr,
 	&dev_attr_SVC_OCTA2_CHIPID.attr,
+	&dev_attr_SVC_OCTA_DDI_CHIPID.attr,
 	&dev_attr_esd_check.attr,
 	&dev_attr_rf_info.attr,
 	&dev_attr_dynamic_freq.attr,
@@ -4291,6 +4335,7 @@ static struct attribute *panel_sysfs_attributes[] = {
 	&dev_attr_dia.attr,
 	&dev_attr_fp_green_circle.attr,
 	&dev_attr_window_color.attr,
+	&dev_attr_force_white.attr,
 	NULL
 };
 static const struct attribute_group panel_sysfs_group = {

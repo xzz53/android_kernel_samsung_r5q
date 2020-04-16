@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD), Linux-specific network interface
  * Basically selected code segments from usb-cdc.c and usb-rndis.c
  *
- * Copyright (C) 1999-2019, Broadcom.
+ * Copyright (C) 1999-2020, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux_exportfs.c 845836 2019-10-16 03:24:51Z $
+ * $Id: dhd_linux_exportfs.c 851174 2019-11-18 12:13:55Z $
  */
 #include <linux/kobject.h>
 #include <linux/proc_fs.h>
@@ -626,7 +626,17 @@ void dhd_get_memdump_info(dhd_pub_t *dhd)
 		dhd->memdump_enabled = DUMP_MEMFILE_BUGON;
 #endif /* DHD_INIT_DEFAULT_MEMDUMP */
 #endif /* !DHD_EXPORT_CNTL_FILE */
-	DHD_ERROR(("%s: MEMDUMP ENABLED = %d\n", __FUNCTION__, dhd->memdump_enabled));
+#ifdef DHD_DETECT_CONSECUTIVE_MFG_HANG
+	/* override memdump_enabled value to avoid once trap issues */
+	if (dhd_bus_get_fw_mode(dhd) == DHD_FLAG_MFG_MODE &&
+			(dhd->memdump_enabled == DUMP_MEMONLY ||
+			dhd->memdump_enabled == DUMP_MEMFILE_BUGON)) {
+		dhd->memdump_enabled = DUMP_MEMFILE;
+		DHD_ERROR(("%s : Override memdump_value to %d\n",
+				__FUNCTION__, dhd->memdump_enabled));
+	}
+#endif /* DHD_DETECT_CONSECUTIVE_MFG_HANG */
+	DHD_ERROR(("%s: MEMDUMP ENABLED = %u\n", __FUNCTION__, dhd->memdump_enabled));
 }
 
 #ifdef DHD_EXPORT_CNTL_FILE
@@ -663,7 +673,7 @@ set_memdump_info(struct dhd_info *dev, const char *buf, size_t count)
 
 	dhdp->memdump_enabled = (uint32)memval;
 
-	DHD_ERROR(("%s: MEMDUMP ENABLED = %iu\n", __FUNCTION__, dhdp->memdump_enabled));
+	DHD_ERROR(("%s: MEMDUMP ENABLED = %u\n", __FUNCTION__, dhdp->memdump_enabled));
 	return count;
 }
 

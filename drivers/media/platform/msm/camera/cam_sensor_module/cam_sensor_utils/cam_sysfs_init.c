@@ -249,7 +249,7 @@ static ssize_t front_camera_type_show(struct device *dev,
 		return rc;
 	return 0;
 }
-#elif defined(CONFIG_SEC_A70Q_PROJECT) || defined(CONFIG_SEC_R3Q_PROJECT)
+#elif defined(CONFIG_SEC_A70Q_PROJECT) || defined(CONFIG_SEC_R3Q_PROJECT) || defined(CONFIG_SEC_A70S_PROJECT)
 static ssize_t front_camera_type_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
@@ -476,7 +476,7 @@ static ssize_t front_module_info_show(struct device *dev,
 {
 	int rc = 0;
 
-	pr_info("[FW_DBG] front_module_info : %s\n", front_module_info);
+	//pr_info("[FW_DBG] front_module_info : %s\n", front_module_info);
 	rc = scnprintf(buf, PAGE_SIZE, "%s", front_module_info);
 	if (rc)
 		return rc;
@@ -901,7 +901,7 @@ static ssize_t front_camera_firmware_show(struct device *dev,
 {
 	int rc = 0;
 
-	pr_info("[FW_DBG] front_cam_fw_ver : %s\n", front_cam_fw_ver);
+	//pr_info("[FW_DBG] front_cam_fw_ver : %s\n", front_cam_fw_ver);
 	rc = scnprintf(buf, PAGE_SIZE, "%s", front_cam_fw_ver);
 	if (rc)
 		return rc;
@@ -1115,7 +1115,7 @@ char rear_sensor_id[FROM_SENSOR_ID_SIZE + 1] = "\0";
 static ssize_t rear_sensorid_exif_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	pr_info("[FW_DBG] rear_sensor_id : %s\n", rear_sensor_id);
+	//pr_info("[FW_DBG] rear_sensor_id : %s\n", rear_sensor_id);
 	memcpy(buf, rear_sensor_id, FROM_SENSOR_ID_SIZE);
 	return FROM_SENSOR_ID_SIZE;
 }
@@ -1133,7 +1133,7 @@ char rear4_sensor_id[FROM_SENSOR_ID_SIZE +1] = "\0";
 static ssize_t rear4_sensorid_exif_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	pr_info("[FW_DBG] rear4_sensor_id : %s\n",rear4_sensor_id);
+	//pr_info("[FW_DBG] rear4_sensor_id : %s\n",rear4_sensor_id);
 	memcpy(buf,rear4_sensor_id,FROM_SENSOR_ID_SIZE);
 	return FROM_SENSOR_ID_SIZE;
 }
@@ -1150,7 +1150,7 @@ char front_sensor_id[FROM_SENSOR_ID_SIZE + 1] = "\0";
 static ssize_t front_sensorid_exif_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	pr_info("[FW_DBG] front_sensor_id : %s\n", front_sensor_id);
+	//pr_info("[FW_DBG] front_sensor_id : %s\n", front_sensor_id);
 	memcpy(buf, front_sensor_id, FROM_SENSOR_ID_SIZE);
 	return FROM_SENSOR_ID_SIZE;
 }
@@ -1169,7 +1169,7 @@ char front_mtf_exif[FROM_MTF_SIZE + 1] = "\0";
 static ssize_t front_mtf_exif_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	PRINT_ARRAY_HEX(front_mtf_exif, FROM_MTF_SIZE);
+	//PRINT_ARRAY_HEX(front_mtf_exif, FROM_MTF_SIZE);
 	memcpy(buf, front_mtf_exif, FROM_MTF_SIZE);
 	return FROM_MTF_SIZE;
 }
@@ -1606,7 +1606,7 @@ static ssize_t rear3_camera_info_show(struct device *dev,
 {
 	int rc = 0;
 
-	pr_info("[FW_DBG] cam_info : %s\n", rear3_cam_info);
+	pr_info("[FW_DBG] rear3_cam_info : %s\n", rear3_cam_info);
 	rc = scnprintf(buf, PAGE_SIZE, "%s", rear3_cam_info);
 	if (rc)
 		return rc;
@@ -1621,7 +1621,30 @@ static ssize_t rear3_camera_info_store(struct device *dev,
 
 	return size;
 }
+#if defined(CONFIG_SEC_A71_PROJECT)
+//MACRO
+char rear4_cam_info[150] = "NULL\n";	//camera_info
+static ssize_t rear4_camera_info_show(struct device *dev,
+					 struct device_attribute *attr, char *buf)
+{
+	int rc = 0;
 
+	pr_info("[FW_DBG] rear4_cam_info : %s\n", rear4_cam_info);
+	rc = scnprintf(buf, PAGE_SIZE, "%s", rear4_cam_info);
+	if (rc)
+		return rc;
+	return 0;
+}
+
+static ssize_t rear4_camera_info_store(struct device *dev,
+					  struct device_attribute *attr, const char *buf, size_t size)
+{
+	pr_info("[FW_DBG] buf : %s\n", buf);
+//	scnprintf(rear4_cam_info, sizeof(rear4_cam_info), "%s", buf);
+
+	return size;
+}
+#endif
 char module3_info[SYSFS_MODULE_INFO_SIZE] = "NULL\n";
 static ssize_t rear3_module_info_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
@@ -1696,7 +1719,7 @@ static ssize_t rear2_type_show(struct device *dev,
 #endif
 
 
-#if defined(CONFIG_SEC_A70Q_PROJECT) || defined(CONFIG_SEC_A60Q_PROJECT) || defined(CONFIG_SEC_A90Q_PROJECT) || defined(CONFIG_SEC_M40_PROJECT) || defined(CONFIG_SEC_R3Q_PROJECT)
+#if defined(CONFIG_SEC_A70Q_PROJECT) || defined(CONFIG_SEC_A60Q_PROJECT) || defined(CONFIG_SEC_A90Q_PROJECT) || defined(CONFIG_SEC_M40_PROJECT) || defined(CONFIG_SEC_R3Q_PROJECT) || defined(CONFIG_SEC_A70S_PROJECT)
 static ssize_t rear3_type_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
@@ -1774,7 +1797,7 @@ char rear2_sensor_id[FROM_SENSOR_ID_SIZE + 1] = "\0";
 static ssize_t rear2_sensorid_exif_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	pr_info("[FW_DBG] rear2_sensor_id : %s\n", rear2_sensor_id);
+	//pr_info("[FW_DBG] rear2_sensor_id : %s\n", rear2_sensor_id);
 	memcpy(buf, rear2_sensor_id, FROM_SENSOR_ID_SIZE);
 	return FROM_SENSOR_ID_SIZE;
 }
@@ -1793,7 +1816,7 @@ char rear3_sensor_id[FROM_SENSOR_ID_SIZE + 1] = "\0";
 static ssize_t rear3_sensorid_exif_show(struct device *dev,
 					 struct device_attribute *attr, char *buf)
 {
-	pr_info("[FW_DBG] rear3_sensor_id : %s\n", rear3_sensor_id);
+	//pr_info("[FW_DBG] rear3_sensor_id : %s\n", rear3_sensor_id);
 	memcpy(buf, rear3_sensor_id, FROM_SENSOR_ID_SIZE);
 	return FROM_SENSOR_ID_SIZE;
 }
@@ -2086,8 +2109,8 @@ static ssize_t ois_power_store(struct device *dev, struct device_attribute *attr
 		break;
 	case '1':
 		cam_ois_power_up(g_o_ctrl);
-		msleep(200);
 		isOisPoweredUp = 1;
+		msleep(200);
 		pr_info("%s: power up", __func__);
 		break;
 
@@ -2484,7 +2507,11 @@ static ssize_t supported_cameraIds_store(struct device *dev,
 
 char supported_camera_ids[] = {
 	0,  //REAR_0 = Rear Wide
+#if !defined(CONFIG_SEC_R5Q_PROJECT)
 	1,  //FRONT_1 = Front Wide
+#else
+	3,  //FRONT_FULL_FOV
+#endif
 #if defined(CONFIG_SAMSUNG_REAR_TRIPLE)
 #if defined(CONFIG_SEC_A90Q_PROJECT)
 	20, //DUAL_REAR_ZOOM
@@ -2717,7 +2744,7 @@ char rear_tof_sensor_id[FROM_SENSOR_ID_SIZE + 1] = "\0";
 static ssize_t rear_tof_sensorid_exif_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	pr_info("[FW_DBG] rear_tof_sensor_id : %s\n", rear_tof_sensor_id);
+	//pr_info("[FW_DBG] rear_tof_sensor_id : %s\n", rear_tof_sensor_id);
 	memcpy(buf, rear_tof_sensor_id, FROM_SENSOR_ID_SIZE);
 	return FROM_SENSOR_ID_SIZE;
 }
@@ -3598,7 +3625,7 @@ char front_tof_sensor_id[FROM_SENSOR_ID_SIZE + 1] = "\0";
 static ssize_t front_tof_sensorid_exif_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	pr_info("[FW_DBG] front_tof_sensor_id : %s\n", front_tof_sensor_id);
+	//pr_info("[FW_DBG] front_tof_sensor_id : %s\n", front_tof_sensor_id);
 	memcpy(buf, front_tof_sensor_id, FROM_SENSOR_ID_SIZE);
 	return FROM_SENSOR_ID_SIZE;
 }
@@ -4351,6 +4378,8 @@ static DEVICE_ATTR(rear4_mtf_exif, S_IRUGO|S_IWUSR|S_IWGRP,
 	rear4_mtf_exif_show, rear4_mtf_exif_store);
 static DEVICE_ATTR(rear4_moduleid, S_IRUGO,rear4_moduleid_show, NULL);
 #if defined(CONFIG_SEC_A71_PROJECT)
+static DEVICE_ATTR(rear4_caminfo, S_IRUGO|S_IWUSR|S_IWGRP,
+	rear4_camera_info_show, rear4_camera_info_store);
 static DEVICE_ATTR(SVC_rear_module4, S_IRUGO, rear4_moduleid_show, NULL);
 #endif
 #endif
@@ -4911,6 +4940,12 @@ static int __init cam_sysfs_init(void)
 		pr_err("Failed to create device file!(%s)!\n",
 			dev_attr_rear3_caminfo.attr.name);
 	}
+#if defined(CONFIG_SEC_A71_PROJECT)
+	if (device_create_file(cam_dev_rear, &dev_attr_rear4_caminfo) < 0) {
+		pr_err("Failed to create device file!(%s)!\n",
+			dev_attr_rear4_caminfo.attr.name);
+	}
+#endif
 	if (device_create_file(cam_dev_rear, &dev_attr_rear2_moduleinfo) < 0) {
 		pr_err("Failed to create device file!(%s)!\n",
 			dev_attr_rear2_moduleinfo.attr.name);

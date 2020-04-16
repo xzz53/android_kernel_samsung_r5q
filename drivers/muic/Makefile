@@ -3,11 +3,7 @@
 #
 
 # MUIC_CORE
-ifeq ($(CONFIG_MUIC_CORE), y)
-	obj-y				+= muic_core.o
-else
-	obj-y				+= muic-core.o
-endif
+obj-y					+= muic-core.o
 obj-$(CONFIG_MUIC_NOTIFIER)		+= muic_notifier.o
 obj-$(CONFIG_MUIC_MANAGER)		+= muic_manager.o
 obj-$(CONFIG_MUIC_SYSFS)		+= muic_sysfs.o
@@ -41,3 +37,5 @@ endif
 ifeq ($(CONFIG_MUIC_UNIVERSAL_SM5720), y)
 	obj-$(CONFIG_MUIC_HV)	+= universal/muic_sm5720_afc.o
 endif
+
+obj-$(CONFIG_MUIC_SM5504)		+= sm5504-muic.o

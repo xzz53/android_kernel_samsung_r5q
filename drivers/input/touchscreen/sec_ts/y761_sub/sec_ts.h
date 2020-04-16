@@ -388,8 +388,8 @@ static unsigned char hover_data[HOVER_DATA_READ_LENGTH] = { 0 };
 #endif
 
 #define SEC_TS_SPONGE_LP_DUMP_LENGTH			70
+#define SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_LENGTH	10
 #define SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_10_LEN	12	/* addr 2, data 10, */
-#define SEC_TS_SPONGE_LP_DUMP_DATA_FORMAT_8_LEN		10	/* addr 2, data 8 */
 
 enum grip_write_mode {
 	G_NONE				= 0,

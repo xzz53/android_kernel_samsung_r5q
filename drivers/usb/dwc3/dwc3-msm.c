@@ -95,6 +95,9 @@
 #define PWR_EVNT_LPM_OUT_RX_ELECIDLE_IRQ_MASK	BIT(12)
 #define PWR_EVNT_LPM_OUT_L1_MASK		BIT(13)
 
+#define DWC31_LINK_LLUCTL(n) (0xd024 + ((n) * 0x80))
+#define FORCE_GEN1_MASK BIT(10)
+
 /* QSCRATCH_GENERAL_CFG register bit offset */
 #define PIPE_UTMI_CLK_SEL	BIT(0)
 #define PIPE3_PHYSTATUS_SW	BIT(3)
@@ -4426,6 +4429,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 {
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 	int ret = 0;
+	u32 val;
 
 	/*
 	 * The vbus_reg pointer could have multiple values
@@ -4458,6 +4462,11 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		pm_runtime_get_sync(mdwc->dev);
 		dbg_event(0xFF, "StrtHost gync",
 			atomic_read(&mdwc->dev->power.usage_count));
+
+		/* disable host gen2 */
+		dwc3_msm_write_reg_field(mdwc->base, DWC31_LINK_LLUCTL(0), FORCE_GEN1_MASK, 1);
+		val = dwc3_msm_read_reg_field(mdwc->base, DWC31_LINK_LLUCTL(0), FORCE_GEN1_MASK);
+
 		if (!IS_ERR_OR_NULL(mdwc->vbus_reg))
 			ret = regulator_enable(mdwc->vbus_reg);
 		if (ret) {

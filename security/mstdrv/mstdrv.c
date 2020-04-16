@@ -201,6 +201,7 @@ struct workqueue_struct *cluster_freq_ctrl_wq;
 struct delayed_work dwork;
 
 DEFINE_MUTEX(mst_mutex);
+DEFINE_MUTEX(transmit_mutex);
 
 /* device driver structures */
 static struct of_device_id mst_match_ldo_table[] = {
@@ -539,11 +540,14 @@ static int transmit_mst_data(int track)
         mst_req_t *kreq = NULL;
         mst_rsp_t *krsp = NULL;
         int req_len = 0, rsp_len = 0;
-	// Core Affinity
-	struct cpumask cpumask;
-	uint32_t cpu;
+        // Core Affinity
+        struct cpumask cpumask;
+        uint32_t cpu;
 
-        mutex_lock(&mst_mutex);
+        if (!mutex_trylock(&transmit_mutex)) {
+            printk("[MST] failed to acquire transmit_mutex!\n");
+            return ERROR_VALUE;
+        }
         snprintf(app_name, MAX_APP_NAME_SIZE, "%s", MST_TA);
         if (NULL == qhandle) {
                 /* start the mst tzapp only when it is not loaded. */
@@ -578,21 +582,21 @@ static int transmit_mst_data(int track)
         krsp = (struct mst_rsp_s *)(qhandle->sbuf + req_len);
         rsp_len = sizeof(mst_rsp_t);
 
-	// Core Affinity
-	printk("[MST] sched_setaffinity not to run on core0");
-	if (num_online_cpus() < 2) {
-		cpumask_setall(&cpumask);
-		for_each_cpu(cpu, &cpumask) {
-			if (cpu == 0)
-				continue;
-			cpu_up(cpu);
-			break;
-		}
-	}
-	cpumask_clear(&cpumask);
-	cpumask_copy(&cpumask, cpu_online_mask);
-	cpumask_clear_cpu(0, &cpumask);
-	sched_setaffinity(0, &cpumask);
+        // Core Affinity
+        printk("[MST] sched_setaffinity not to run on core0");
+        if (num_online_cpus() < 2) {
+            cpumask_setall(&cpumask);
+            for_each_cpu(cpu, &cpumask) {
+                if (cpu == 0)
+                    continue;
+                cpu_up(cpu);
+                break;
+            }
+        }
+        cpumask_clear(&cpumask);
+        cpumask_copy(&cpumask, cpu_online_mask);
+        cpumask_clear_cpu(0, &cpumask);
+        sched_setaffinity(0, &cpumask);
 
         printk("[MST] cmd_id = %x, req_len = %d, rsp_len = %d\n", kreq->cmd_id, req_len, rsp_len);
 
@@ -618,7 +622,7 @@ static int transmit_mst_data(int track)
                 qhandle = NULL;
         }
 exit:
-        mutex_unlock(&mst_mutex);
+        mutex_unlock(&transmit_mutex);
         return ret;
 }
 

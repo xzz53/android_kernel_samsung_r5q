@@ -44,13 +44,6 @@
 
 #define ZT75XX_TS_NVM_OFFSET_LENGTH		(ZT75XX_TS_NVM_OFFSET_HISTORY_QUEUE_ZERO + ZT75XX_TS_NVM_OFFSET_HISTORY_QUEUE_SIZE)
 
-/*
- * bit value should be made a promise with InputFramework.
- *	bit	: feature
- *	0	: AOT -Doubletap wakeup in whole screen when LCD off.
- */
-#define INPUT_FEATURE_SUPPORT_AOT		(1 << 0)
-
 enum switch_system_mode {
 	TO_TOUCH_MODE			= 0,
 	TO_LOWPOWER_MODE		= 1,
@@ -78,6 +71,7 @@ struct zt75xx_ts_platform_data {
 	bool support_lpm_mode;
 	bool bringup;
 	bool mis_cal_check;
+	bool support_hall_ic;
 	u16 pat_function;
 	u16 afe_base;
 	const char *project_name;

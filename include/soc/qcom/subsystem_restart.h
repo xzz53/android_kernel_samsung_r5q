@@ -140,6 +140,9 @@ struct subsys_desc {
 #ifdef CONFIG_SUPPORT_AK0997X
 	int d_hall_rst_gpio;
 #endif
+#ifdef CONFIG_SENSORS_SSC
+	bool run_fssr;
+#endif
 };
 
 /**
@@ -190,6 +193,9 @@ extern int wait_for_shutdown_ack(struct subsys_desc *desc);
 #ifdef CONFIG_SEC_BSP
 extern bool is_subsystem_crash(const char *name);
 extern int is_subsystem_online(const char *name);
+#endif
+#ifdef CONFIG_SENSORS_SSC
+extern void subsys_set_fssr(struct subsys_device *dev, bool value);
 #endif
 #else
 
@@ -264,6 +270,12 @@ static bool is_subsystem_crash(const char *name)
 static int is_subsystem_online(const char *name)
 {
 	return false;
+}
+#endif
+#ifdef CONFIG_SENSORS_SSC
+static void subsys_set_fssr(struct subsys_device *dev, bool value)
+{
+	return;
 }
 #endif
 #endif /* CONFIG_MSM_SUBSYSTEM_RESTART */

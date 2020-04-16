@@ -2766,18 +2766,74 @@ unsigned int blk_rq_err_bytes(const struct request *rq)
 }
 EXPORT_SYMBOL_GPL(blk_rq_err_bytes);
 
+static int rw_size_group(unsigned int bytes)
+{
+	int sg;
+
+	if (bytes <= 4 * 1024)
+		sg = 0;
+	else if (bytes <= 8 * 1024)
+		sg = 1;
+	else if (bytes <= 16 * 1024)
+		sg = 2;
+	else if (bytes <= 32 * 1024)
+		sg = 3;
+	else if (bytes <= 64 * 1024)
+		sg = 4;
+	else if (bytes <= 128 * 1024)
+		sg = 5;
+	else if (bytes <= 256 * 1024)
+		sg = 6;
+	else
+		sg = 7;
+
+	return sg;
+}
+
+static int discard_size_group(unsigned int bytes)
+{
+	int sg;
+
+	if (bytes <= 32 * 1024)
+		sg = 0;
+	else if (bytes <= 64 * 1024)
+		sg = 1;
+	else if (bytes <= 128 * 1024)
+		sg = 2;
+	else if (bytes <= 256 * 1024)
+		sg = 3;
+	else if (bytes <= 512 * 1024)
+		sg = 4;
+	else if (bytes <= 1024 * 1024)
+		sg = 5;
+	else if (bytes <= 2 * 1024 * 1024)
+		sg = 6;
+	else
+		sg = 7;
+
+	return sg;
+}
+
 void blk_account_io_completion(struct request *req, unsigned int bytes)
 {
 	if (blk_do_io_stat(req)) {
 		const int rw = rq_data_dir(req);
 		struct hd_struct *part;
 		int cpu;
+		int sg;
 
 		cpu = part_stat_lock();
 		part = req->part;
 		part_stat_add(cpu, part, sectors[rw], bytes >> 9);
-		if (req_op(req) == REQ_OP_DISCARD)
+		if (req_op(req) == REQ_OP_DISCARD) {
+			sg = discard_size_group(bytes);
+			part_stat_inc(cpu, part, size_cnt[2][sg]);
 			part_stat_add(cpu, part, discard_sectors, bytes >> 9);
+		} else {
+			sg = rw_size_group(bytes);
+			part_stat_inc(cpu, part, size_cnt[rw][sg]);
+		}
+
 		part_stat_unlock();
 	}
 }

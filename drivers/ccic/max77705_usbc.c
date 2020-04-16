@@ -112,10 +112,8 @@ static enum dual_role_property fusb_drp_properties[] = {
 #define MAX77705_IRQSRC_MUIC	(1 << 3)
 
 #define MAX77705_SYS_FW_UPDATE
-#define MAX77705_GRL_ENABLE
 
 #define MAX77705_RAM_TEST
-
 
 #ifdef MAX77705_RAM_TEST
 #define MAX77705_RAM_TEST_RETRY_COUNT 1
@@ -148,7 +146,7 @@ static void max77705_get_version_info(struct max77705_usbc_platform_data *usbc_d
 extern int spu_fireware_signature_verify(const char* fw_name, const char* fw_path);
 #endif
 
-#ifdef MAX77705_GRL_ENABLE
+#ifdef CONFIG_MAX77705_GRL_ENABLE
 static int max77705_i2c_master_write(struct max77705_usbc_platform_data *usbpd_data,
 			int slave_addr, u8 *reg_addr)
 {
@@ -317,7 +315,7 @@ static void max77705_usbc_debug_function(struct max77705_usbc_platform_data *usb
 	max77705_usbc_opcode_write(usbc_data, &write_data);
 }
 
-#ifdef MAX77705_GRL_ENABLE
+#ifdef CONFIG_MAX77705_GRL_ENABLE
 static void max77705_set_forcetrimi(struct max77705_usbc_platform_data *usbc_data)
 {
 	u8 ArrSendData[2] = {0x00, 0x00};
@@ -1478,18 +1476,6 @@ static ssize_t max77705_fw_update(struct device *dev,
 		break;
 	case 3:
 		max77705_usbc_opcode_write(g_usbc_data, &write_data);
-
-		break;
-	case 11:
-		msg_maxim("SYSTEM MESSAGE GRL COMMAND!!!");
-		write_data.opcode = OPCODE_GRL_COMMAND;
-		write_data.write_data[0] = 0x1;
-		write_data.write_length = 0x1;
-		write_data.read_length = 0x2;
-		max77705_usbc_opcode_write(g_usbc_data, &write_data);
-	case 15:
-		max77705_verify_ram_bist_write(g_usbc_data);
-
 		break;
 	default:
 		break;
@@ -1879,6 +1865,12 @@ static void max77705_irq_execute(struct max77705_usbc_platform_data *usbc_data,
 	if (response != cmd_data->response) {
 		msg_maxim("Response [0x%02x] != [0x%02x]",
 			response, cmd_data->response);
+#ifndef CONFIG_MAX77705_GRL_ENABLE
+		if (cmd_data->response == OPCODE_FW_OPCODE_CLEAR) {
+			msg_maxim("Response after FW opcode cleared, just return");
+			return;
+		}
+#endif
 	}
 
 	/* to do(read switch case) */
@@ -1909,6 +1901,17 @@ static void max77705_irq_execute(struct max77705_usbc_platform_data *usbc_data,
 		break;
 	case OPCODE_GET_SRCCAP:
 		max77705_pdo_list(usbc_data, data);
+		break;
+	case OPCODE_SRCCAP_REQUEST:
+		/*
+		 * If response of Source_Capablities message is SinkTxNg(0xFE) or Not in Ready State(0xFF)
+		 * It means that the message can not be sent to Port Partner.
+		 * After Attaching Rp 3.0A, send again the message.
+		 */
+		if (data[1] == 0xfe || data[1] == 0xff){
+			usbc_data->srcccap_request_retry = true;
+			pr_info("%s : srcccap_request_retry is set\n", __func__);
+		}
 		break;
 #if defined(CONFIG_PDIC_PD30)
 	case OPCODE_APDO_SRCCAP_REQUEST:
@@ -2042,9 +2045,13 @@ static void max77705_irq_execute(struct max77705_usbc_platform_data *usbc_data,
 	case OPCODE_READ_SELFTEST:
 		max77705_response_selftest_read(usbc_data, data);
 		break;
-#ifdef MAX77705_GRL_ENABLE
+#ifdef CONFIG_MAX77705_GRL_ENABLE
 	case OPCODE_GRL_COMMAND:
 		max77705_set_forcetrimi(usbc_data);
+		break;
+#else
+	case OPCODE_FW_OPCODE_CLEAR:
+		msg_maxim("Cleared FW OPCODE");
 		break;
 #endif
 #ifdef MAX77705_RAM_TEST
@@ -2121,6 +2128,19 @@ void max77705_usbc_dequeue_queue(struct max77705_usbc_platform_data *usbc_data)
 		cmd_data.val);
 }
 
+#ifndef CONFIG_MAX77705_GRL_ENABLE
+static void max77705_usbc_clear_fw_queue(struct max77705_usbc_platform_data *usbc_data)
+{
+	usbc_cmd_data write_data;
+
+	msg_maxim("called");
+
+	init_usbc_cmd_data(&write_data);
+	write_data.opcode = OPCODE_FW_OPCODE_CLEAR;
+	max77705_usbc_opcode_write(usbc_data, &write_data);
+}
+#endif
+
 void max77705_usbc_clear_queue(struct max77705_usbc_platform_data *usbc_data)
 {
 	usbc_cmd_data cmd_data;
@@ -2142,6 +2162,10 @@ void max77705_usbc_clear_queue(struct max77705_usbc_platform_data *usbc_data)
 
 	msg_maxim("OUT");
 	mutex_unlock(&usbc_data->op_lock);
+#ifndef CONFIG_MAX77705_GRL_ENABLE
+	/* also clear fw opcode queue to sync with driver */
+	max77705_usbc_clear_fw_queue(usbc_data);
+#endif
 }
 
 static void max77705_usbc_cmd_run(struct max77705_usbc_platform_data *usbc_data)
@@ -2629,7 +2653,12 @@ void max77705_usbc_check_sysmsg(struct max77705_usbc_platform_data *usbc_data, u
 		if (!is_empty_queue) {
 			copy_usbc_cmd_data(&(usbc_data->last_opcode), &cmd_data);
 
-			if (cmd_data.opcode == OPCODE_GRL_COMMAND || next_opcode == OPCODE_VDM_DISCOVER_SET_VDM_REQ) {
+#ifdef CONFIG_MAX77705_GRL_ENABLE
+			if (cmd_data.opcode == OPCODE_GRL_COMMAND || next_opcode == OPCODE_VDM_DISCOVER_SET_VDM_REQ)
+#else
+			if (next_opcode == OPCODE_VDM_DISCOVER_SET_VDM_REQ)
+#endif
+			{
 				usbc_data->opcode_stamp = 0;
 				max77705_usbc_dequeue_queue(usbc_data);
 				cmd_data.opcode = OPCODE_NONE;
@@ -2659,7 +2688,7 @@ void max77705_usbc_check_sysmsg(struct max77705_usbc_platform_data *usbc_data, u
 #endif
 		/* TO DO DEQEUE MSG. */
 		break;
-#ifdef MAX77705_GRL_ENABLE
+#ifdef CONFIG_MAX77705_GRL_ENABLE
 	case SYSMSG_SET_GRL:
 		max77705_usbc_clear_queue(usbc_data);
 		msg_maxim("SYSTEM MESSAGE GRL COMMAND!!!");
@@ -2671,7 +2700,6 @@ void max77705_usbc_check_sysmsg(struct max77705_usbc_platform_data *usbc_data, u
 		cmd_data.read_length = 0x2;
 		max77705_usbc_opcode_write(usbc_data, &cmd_data);
 //		max77705_set_forcetrimi(usbc_data);
-
 		break;
 #endif
 	case SYSMSG_CCx_5V_SHORT:
@@ -2726,7 +2754,7 @@ void max77705_usbc_check_sysmsg(struct max77705_usbc_platform_data *usbc_data, u
 				msg_maxim("SYSMSG PWR NEGO ERR : VDM request retry");
 			}
 		} else { /* unstructured vdm */
-			usbc_data->uvdm_error = 1;
+			usbc_data->uvdm_error = -EACCES;
 			msg_maxim("SYSMSG PWR NEGO ERR : UVDM request error - dir : %d",
 				usbc_data->is_in_sec_uvdm_out);
 			if (usbc_data->is_in_sec_uvdm_out == DIR_OUT)
@@ -2763,6 +2791,16 @@ void max77705_usbc_check_sysmsg(struct max77705_usbc_platform_data *usbc_data, u
 				CCIC_NOTIFY_DETACH, 0/*rprd*/, 0);
 		}
 #endif
+		break;
+	case SYSMSG_10K_TO_22K ... SYSMSG_22K_TO_56K:
+		msg_maxim("TypeC earphone is attached");
+		usbc_data->pd_data->cc_sbu_short = true;
+		max77705_check_pdo(usbc_data);
+		break;
+	case SYSMSG_56K_TO_22K ... SYSMSG_22K_TO_10K:
+		msg_maxim("TypeC earphone is detached");
+		usbc_data->pd_data->cc_sbu_short = false;
+		max77705_check_pdo(usbc_data);
 		break;
 	default:
 		break;
@@ -3264,6 +3302,140 @@ void factory_write_reg_uic_int_m(struct work_struct *work)
 }
 #endif
 
+#ifdef CONFIG_USB_AUDIO_ENHANCED_DETECT_TIME
+#define NUM_BUS_TABLE	12
+#define MAX_FREQ		2841600
+#define MHZ_TO_BPS(mhz, w) ((uint64_t)mhz * 1000 * 1000 * w)
+#define BUS_W 4	/* SM8150 DDR Voting('w' for DDR is 4) */
+
+static int ab_ib_bus_vectors[NUM_BUS_TABLE][2] = {
+	{0, 0},  /* 0 */
+	{0, 200}, /* 1 */
+	{0, 300}, /* 2 */
+	{0, 451}, /* 3 */
+	{0, 547}, /* 4 */
+	{0, 681}, /* 5 */
+	{0, 768}, /* 6 */
+	{0, 1017}, /* 7 */
+	{0, 1296}, /* 8 */
+	{0, 1555}, /* 9 */
+	{0, 1803}, /* 10 */
+	{0, 2092} /* 11 */
+};
+
+
+
+static struct msm_bus_vectors usbhost_reg_bus_vectors[NUM_BUS_TABLE];
+
+static void fill_bus_vector(void)
+{
+	int i = 0;
+	for (i = 0; i < NUM_BUS_TABLE; i++) {
+		usbhost_reg_bus_vectors[i].src = MSM_BUS_MASTER_AMPSS_M0;
+		usbhost_reg_bus_vectors[i].dst = MSM_BUS_SLAVE_EBI_CH0;
+		usbhost_reg_bus_vectors[i].ab = ab_ib_bus_vectors[i][0];
+		usbhost_reg_bus_vectors[i].ib = MHZ_TO_BPS(ab_ib_bus_vectors[i][1], BUS_W);
+	}
+}
+
+static struct msm_bus_paths usbhost_reg_bus_usecases[ARRAY_SIZE(usbhost_reg_bus_vectors)];
+static struct msm_bus_scale_pdata usbhost_reg_bus_scale_table = {
+	.usecase = usbhost_reg_bus_usecases,
+	.num_usecases = ARRAY_SIZE(usbhost_reg_bus_usecases),
+	.name = "usbhost_bw",
+};
+static u32 bus_hdl;
+
+static int trans_freq_to_idx(int request_ddr_freq)
+{
+	int i = 0;
+
+	if (request_ddr_freq <= 0)
+		return 0;
+
+	/* in case of null table, return 0*/
+	if (NUM_BUS_TABLE == 1)
+		return 0;
+
+	for (i = 0; i < NUM_BUS_TABLE-1; i++)
+		if (request_ddr_freq > ab_ib_bus_vectors[i][1] &&
+			request_ddr_freq <= ab_ib_bus_vectors[i+1][1]) {
+			return (i+1);
+		}
+
+	return 0;
+}
+
+void max77705_clk_booster_init(void)
+{
+	int i = 0;
+
+	pr_info("[PDIC Booster] %s+ \n", __func__);
+	fill_bus_vector();
+	for (i = 0; i < usbhost_reg_bus_scale_table.num_usecases; i++) {
+		usbhost_reg_bus_usecases[i].num_paths = 1;
+		usbhost_reg_bus_usecases[i].vectors = &usbhost_reg_bus_vectors[i];
+	}
+	bus_hdl = msm_bus_scale_register_client(&usbhost_reg_bus_scale_table);
+	pr_info("[PDIC Booster] %s- \n", __func__);
+}
+
+void max77705_clk_booster_set(void *data, int on)
+{
+	struct max77705_usbc_platform_data *usbpd_data = data;
+	int res = 0;
+	int index = 0;
+
+	if (system_state < SYSTEM_RUNNING) {
+		pr_info("[PDIC Booster] %d is not ready", on);
+		return;
+	}
+	pr_info("[PDIC Booster] %s+: %d \n", __func__, on);
+	cancel_delayed_work_sync(&usbpd_data->acc_booster_off_work);
+	if (on) {
+		usbpd_data->set_booster = true;
+		// cpu freq
+		res = set_freq_limit(DVFS_BOOST_HOST_ID, MAX_FREQ);
+		// hmp booster on
+		sched_set_boost(1);
+		// ddr freq
+		index = trans_freq_to_idx(2092);
+		msm_bus_scale_client_update_request(bus_hdl, index);
+
+		schedule_delayed_work(&usbpd_data->acc_booster_off_work,
+			msecs_to_jiffies(CLK_BOOSTER_OFF_WAIT_MS));
+	} else {
+		if (usbpd_data->set_booster) {
+			schedule_delayed_work(&usbpd_data->acc_booster_off_work,
+				msecs_to_jiffies(0));
+		} else
+			pr_info("[PDIC Booster]have already turned off \n");
+	}
+	pr_info("[PDIC Booster] %s-:%d \n", __func__, on);
+}
+
+void max77705_clk_booster_off(struct work_struct *wk)
+{
+	struct delayed_work *delay_work =
+		container_of(wk, struct delayed_work, work);
+	struct max77705_usbc_platform_data *usbpd_data =
+		container_of(delay_work, struct max77705_usbc_platform_data, acc_booster_off_work);		
+	int res = 0;
+
+	pr_info("[PDIC Booster] %s+  \n", __func__);
+	// cpu freq
+	res = set_freq_limit(DVFS_BOOST_HOST_ID, -1);
+	// hmp booster off
+	sched_set_boost(0);
+	// ddr freq
+	msm_bus_scale_client_update_request(bus_hdl, 0);
+
+	usbpd_data->set_booster = false;
+	pr_info("[PDIC Booster] %s- \n", __func__);
+
+}
+#endif
+
 static int max77705_usbc_probe(struct platform_device *pdev)
 {
 	struct max77705_dev *max77705 = dev_get_drvdata(pdev->dev.parent);
@@ -3397,6 +3569,10 @@ static int max77705_usbc_probe(struct platform_device *pdev)
 	usbc_data->ccrp_state = 0;
 	usbc_data->need_recover = false;
 	usbc_data->op_ctrl1_w = (BIT_CCSrcSnk | BIT_CCSnkSrc | BIT_CCDetEn);
+	usbc_data->srcccap_request_retry = false;
+#ifdef CONFIG_USB_AUDIO_ENHANCED_DETECT_TIME	
+	usbc_data->set_booster = false;
+#endif
 #if defined(CONFIG_USB_HOST_NOTIFY)
 	send_otg_notify(o_notify, NOTIFY_EVENT_POWER_SOURCE, 0);
 #endif
@@ -3406,6 +3582,7 @@ static int max77705_usbc_probe(struct platform_device *pdev)
 	init_completion(&usbc_data->resume_wait);
 	init_completion(&usbc_data->op_completion);
 	init_completion(&usbc_data->ccic_sysfs_completion);
+	init_completion(&usbc_data->psrdy_wait);
 	init_waitqueue_head(&usbc_data->host_turn_on_wait_q);
 	usbc_data->host_turn_on_wait_time = 20;
 	usbc_data->op_wait_queue = create_singlethread_workqueue("op_wait");
@@ -3449,6 +3626,10 @@ static int max77705_usbc_probe(struct platform_device *pdev)
 	// max77705_usbc_enable_auto_vbus(usbc_data);
 
 	INIT_DELAYED_WORK(&usbc_data->acc_detach_work, max77705_acc_detach_check);
+#ifdef CONFIG_USB_AUDIO_ENHANCED_DETECT_TIME
+	max77705_clk_booster_init();
+	INIT_DELAYED_WORK(&usbc_data->acc_booster_off_work, max77705_clk_booster_off);
+#endif
 	INIT_DELAYED_WORK(&usbc_data->check_discover_modes_work, max77705_check_discover_modes);
 	ccic_register_switch_device(1);
 	INIT_DELAYED_WORK(&usbc_data->usb_external_notifier_register_work,
@@ -3462,6 +3643,7 @@ static int max77705_usbc_probe(struct platform_device *pdev)
 	pccic_data->misc_dev->uvdm_write = max77705_sec_uvdm_out_request_message;
 	pccic_data->misc_dev->uvdm_ready = max77705_sec_uvdm_ready;
 	pccic_data->misc_dev->uvdm_close = max77705_sec_uvdm_close;
+	pccic_data->misc_dev->pps_control = max77705_sec_pps_control;
 #endif
 	/* Register ccic handler to ccic notifier block list */
 	ret = usb_external_notify_register(&usbc_data->usb_external_notifier_nb,

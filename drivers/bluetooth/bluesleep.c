@@ -193,6 +193,15 @@ static void hsuart_power(int on)
 			BT_DBG("%s called. But bluesleep already stopped 1", __func__);
 			return;
 		}
+		if (bsi->uport->state == NULL) {
+			BT_DBG("%s - bsi->uport->state is null", __func__);
+			return;
+		}
+		if (bsi->uport->state->port.count == 0) {
+			BT_DBG("%s - bsi->uport->state->port.count is 0, uart_close() already called", __func__);
+			return;
+		}
+
 		clk_cnt = bluesleep_get_uart_clock_count();
 
 		if (clk_cnt >= 1) {

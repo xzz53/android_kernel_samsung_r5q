@@ -31,7 +31,7 @@
 #elif defined(CONFIG_MACH_BEYOND1QLTE_JPN_DCM) || defined(CONFIG_MACH_BEYOND1QLTE_JPN_KDI) ||    \
 	defined(CONFIG_MACH_BEYOND2QLTE_JPN_DCM) || defined(CONFIG_MACH_BEYOND2QLTE_JPN_KDI)
 #include <linux/ccic/max77705C_pass2_PID04.h>
-#elif defined(CONFIG_SEC_R3Q_PROJECT)
+#elif defined(CONFIG_SEC_R3Q_PROJECT) || defined(CONFIG_SEC_BLOOMQ_PROJECT)
 #include <linux/ccic/max77705C_pass2_PID05.h>
 #else
 #include <linux/ccic/max77705C_pass2.h>

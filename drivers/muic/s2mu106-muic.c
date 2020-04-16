@@ -2846,12 +2846,13 @@ static int s2mu106_muic_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, muic_data);
 
 	if (muic_data->pdata->init_gpio_cb)
-		ret = muic_data->pdata->init_gpio_cb(muic_data->pdata, get_switch_sel());
+		ret = muic_data->pdata->init_gpio_cb(get_switch_sel());
 	if (ret) {
 		pr_err("%s failed to init gpio(%d)\n", __func__, ret);
 		goto fail_init_gpio;
 	}
 
+	muic_pdata->uart_path = MUIC_PATH_UART_AP;
 	pr_info("%s: usb_path(%d), uart_path(%d)\n", __func__,
 		muic_pdata->usb_path, muic_pdata->uart_path);
 

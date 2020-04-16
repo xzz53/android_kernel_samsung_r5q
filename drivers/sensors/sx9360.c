@@ -131,6 +131,10 @@ struct sx9360_p {
 	char hall_ic[6];
 
 	u32 hallic_cert_detect;
+#ifdef CONFIG_SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+	const char *dvdd_vreg_name;	/* regulator name */
+	struct regulator *dvdd_vreg;	/* regulator */
+#endif
 };
 
 static int sx9360_check_hallic_state(char *file_path, char hall_ic_status[])
@@ -1461,7 +1465,13 @@ static int sx9360_parse_dt(struct sx9360_p *data, struct device *dev)
 		pr_info("[SX9360]: %s - get gpio_nirq %d\n",
 			__func__, data->gpio_nirq);
 	}
-
+#ifdef CONFIG_SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+	if (of_property_read_string_index(dNode, "sx9360,dvdd_vreg_name", 0,
+			(const char **)&data->dvdd_vreg_name)) {
+		data->dvdd_vreg_name = NULL;
+	}
+	pr_info("[SX9360] %s - dvdd_vreg_name: %s\n", __func__, data->dvdd_vreg_name);
+#endif
 	if (!sx9360_read_setupreg(dNode, SX9360_GNRLCTRL2, &val))
 		setup_reg[SX9360_GNRLCTRL2_REG_IDX].val = (u8)val;
 	if (!sx9360_read_setupreg(dNode, SX9360_REFRESOLUTION, &val))
@@ -1472,6 +1482,8 @@ static int sx9360_parse_dt(struct sx9360_p *data, struct device *dev)
 		setup_reg[SX9360_RESOLUTION_REG_IDX].val = (u8)val;	
 	if (!sx9360_read_setupreg(dNode, SX9360_AGAINFREQ, &val))
 		setup_reg[SX9360_AGAINFREQ_REG_IDX].val = (u8)val;
+	if (!sx9360_read_setupreg(dNode, SX9360_AVGFILT, &val))
+		setup_reg[SX9360_AVGFILT_REG_IDX].val = (u8)val;
 	if (!sx9360_read_setupreg(dNode, SX9360_REFGAINRAWFILT, &val))
 		setup_reg[SX9360_REFGAINRAWFILT_REG_IDX].val = (u8)val;
 	if (!sx9360_read_setupreg(dNode, SX9360_GAINRAWFILT, &val))
@@ -1573,7 +1585,39 @@ static int sx9360_check_chip_id(struct sx9360_p *data)
 
 	return 0;
 }
+#ifdef CONFIG_SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+static int sx9360_setup_regulator(struct sx9360_p *data)
+{
+	int ret = 0;
+	if (data->dvdd_vreg_name) {
+		if (data->dvdd_vreg == NULL) {
+			data->dvdd_vreg = regulator_get(NULL, data->dvdd_vreg_name);
+			ret = IS_ERR(data->dvdd_vreg);
+			if (ret) {
+				data->dvdd_vreg = NULL;
+				pr_err("[SX9360] %s : failed to get dvdd_vreg %s\n",
+					data->dvdd_vreg_name);
+				return ret;
+			}
 
+			ret = regulator_set_voltage(data->dvdd_vreg, 3000000, 3000000);
+			if (ret) {
+				pr_err("[SX9360] %s : failed to set 3.0v (%d)\n", __func__, ret);
+				return ret;
+			}
+
+			pr_info("[SX9360] %s : normal setting for 3.0v\n", __func__);
+
+			ret = regulator_enable(data->dvdd_vreg);
+			if (ret) {
+				pr_err("[SX9360] %s : 3.0v enable failed\n", __func__);
+			}
+		}
+	}
+	
+	return ret;
+}
+#endif
 static int sx9360_probe(struct i2c_client *client,
 		const struct i2c_device_id *id)
 {
@@ -1620,7 +1664,14 @@ static int sx9360_probe(struct i2c_client *client,
 		pr_err("[SX9360]: %s - could not setup pin\n", __func__);
 		goto exit_setup_pin;
 	}
-
+#ifdef CONFIG_SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+	ret = sx9360_setup_regulator(data);
+	if (ret) {
+		pr_err("[SX9360]: %s - could not setup voltage to 3.0v \n", __func__);
+	} else  {
+		usleep_range(10000, 10000);
+	}
+#endif
 	/* read chip id */
 	ret = sx9360_check_chip_id(data);
 	if (ret < 0) {
@@ -1683,6 +1734,10 @@ exit_register_failed:
 exit_request_threaded_irq:
 exit_chip_reset:
 	gpio_free(data->gpio_nirq);
+#ifdef CONFIG_SENSORS_GRIP_IC_VOLTAGE_SET_FOR_EACH
+	/* free ldo */
+	regulator_put(data->dvdd_vreg);
+#endif
 exit_setup_pin:
 exit_of_node:
 	mutex_destroy(&data->mode_mutex);

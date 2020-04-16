@@ -237,6 +237,18 @@ config FOLDER_HALL
 	help
 	  Enable FOLDER Hall Feature
 
+config LOGICAL_HALL
+	bool "LOGICAL HALL"
+	default n
+	help
+	  Enable LOGICAL Hall Feature
+
+config WACOM_HALL
+	bool "WACOM HALL"
+	default n
+	help
+	  Enable WACOM Hall Feature
+
 config KEYBOARD_GPIO
 	tristate "GPIO Buttons"
 	depends on GPIOLIB || COMPILE_TEST

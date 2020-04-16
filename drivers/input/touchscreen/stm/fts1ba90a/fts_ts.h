@@ -291,11 +291,11 @@ struct fts_sponge_information {
 	u8 sponge_model_name[32];
 } __packed;
 
-#define FTS_CMD_EDGE_HANDLER		0x00
 #define FTS_CMD_EDGE_AREA		0x07
 #define FTS_CMD_DEAD_ZONE		0x08
 #define FTS_CMD_LANDSCAPE_MODE		0x09
 #define FTS_CMD_LANDSCAPE_TOP_BOTTOM	0x0A
+#define FTS_CMD_EDGE_HANDLER		0x0C
 
 enum grip_write_mode {
 	G_NONE				= 0,

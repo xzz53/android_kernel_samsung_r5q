@@ -20,8 +20,8 @@
 enum {
 	BUILT_IN = 0,
 	UMS,
-	SPU,
 	NONE,
+	SPU,
 };
 
 /**
@@ -415,7 +415,7 @@ int fts_fw_wait_for_event(struct fts_ts_info *info, u8 *result, u8 result_cnt)
 	return rc;
 }
 
-int fts_fw_wait_for_echo_event(struct fts_ts_info *info, u8 *cmd, u8 cmd_cnt)
+int fts_fw_wait_for_echo_event(struct fts_ts_info *info, u8 *cmd, u8 cmd_cnt, int delay)
 {
 	int rc = 0;
 	int i;
@@ -424,6 +424,18 @@ int fts_fw_wait_for_echo_event(struct fts_ts_info *info, u8 *cmd, u8 cmd_cnt)
 	u8 data[FTS_EVENT_SIZE];
 	int retry = 0;
 
+	mutex_lock(&info->wait_for);
+
+	rc = info->fts_write_reg(info, cmd, cmd_cnt);
+	if (rc < 0) {
+		input_err(true, &info->client->dev, "%s: failed to write command\n", __func__);
+		mutex_unlock(&info->wait_for);
+		return rc;
+	}
+
+	if (delay)
+		fts_delay(delay);
+
 	memset(data, 0x0, FTS_EVENT_SIZE);
 
 	regAdd = FTS_READ_ONE_EVENT;
@@ -431,11 +443,19 @@ int fts_fw_wait_for_echo_event(struct fts_ts_info *info, u8 *cmd, u8 cmd_cnt)
 	while (info->fts_read_reg(info, &regAdd, 1, (u8 *)data, FTS_EVENT_SIZE)) {
 		if (data[0] != 0x00)
 			input_info(true, &info->client->dev,
-					"%s: event %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n",
-					__func__, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
+					"%s: event %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n",
+					__func__, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+					data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]);
 
 		if ((data[0] == FTS_EVENT_STATUS_REPORT) && (data[1] == 0x01)) {  // Check command ECHO
-			for (i = 0; i < cmd_cnt; i++) {
+			int loop_cnt;
+
+			if (cmd_cnt > 4)
+				loop_cnt = 4;
+			else
+				loop_cnt = cmd_cnt;
+
+			for (i = 0; i < loop_cnt; i++) {
 				if (data[i + 2] != cmd[i]) {
 					matched = false;
 					break;
@@ -463,6 +483,8 @@ int fts_fw_wait_for_echo_event(struct fts_ts_info *info, u8 *cmd, u8 cmd_cnt)
 		}
 		fts_delay(20);
 	}
+
+	mutex_unlock(&info->wait_for);
 
 	return rc;
 }
@@ -547,10 +569,8 @@ int fts_execute_autotune(struct fts_ts_info *info, bool IsSaving)
 	if (IsSaving == true) {
 		// full panel init
 		regAdd[0] = 0xA4; regAdd[1] = 0x00; regAdd[2] = 0x03;
-		info->fts_write_reg(info, &regAdd[0], 3);
-		fts_delay(500);
 
-		rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+		rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 500);
 #ifdef TCLM_CONCEPT
 		if (info->tdata->nvdata.cal_fail_cnt == 0xFF)
 			info->tdata->nvdata.cal_fail_cnt = 0;
@@ -573,10 +593,8 @@ int fts_execute_autotune(struct fts_ts_info *info, bool IsSaving)
 		DataType = 0x3F;
 
 		regAdd[0] = 0xA4; regAdd[1] = 0x03; regAdd[2] = (u8)DataType; regAdd[3] = 0x00;
-		info->fts_write_reg(info, &regAdd[0], 4);
-		fts_delay(500);
 
-		rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 4);
+		rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 4, 500);
 		if (rc < 0) {
 			input_info(true, &info->client->dev, "%s: timeout\n", __func__);
 			goto ERROR;
@@ -835,7 +853,7 @@ done:
 	return retval;
 }
 
-static int fts_load_fw_from_ums(struct fts_ts_info *info, const char *file_path)
+static int fts_load_fw_from_ums(struct fts_ts_info *info, int type)
 {
 	struct file *fp;
 	mm_segment_t old_fs;
@@ -843,9 +861,24 @@ static int fts_load_fw_from_ums(struct fts_ts_info *info, const char *file_path)
 	int error = 0;
 	int spu_ret = 0;
 	int ori_size = 0;
+	char file_path[100];
 
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
+
+	switch (type) {
+	case TSP_TYPE_EXTERNAL_FW:
+		snprintf(file_path, sizeof(file_path), TSP_PATH_EXTERNAL_FW);
+		break;
+	case TSP_TYPE_EXTERNAL_FW_SIGNED:
+		snprintf(file_path, sizeof(file_path), TSP_PATH_EXTERNAL_FW_SIGNED);
+		break;
+	case TSP_TYPE_SPU_FW_SIGNED:
+		snprintf(file_path, sizeof(file_path), TSP_PATH_SPU_FW_SIGNED);
+		break;
+	default:
+		return -ENODEV;
+	}
 
 	fp = filp_open(file_path, O_RDONLY, 0400);
 	if (IS_ERR(fp)) {
@@ -871,7 +904,7 @@ static int fts_load_fw_from_ums(struct fts_ts_info *info, const char *file_path)
 
 		input_info(true, &info->client->dev,
 				"%s: start, file path %s, size %ld Bytes\n",
-				__func__, FTS_DEFAULT_UMS_FW, fw_size);
+				__func__, file_path, fw_size);
 
 		if (nread != fw_size) {
 			input_err(true, &info->client->dev,
@@ -882,7 +915,7 @@ static int fts_load_fw_from_ums(struct fts_ts_info *info, const char *file_path)
 			header = (struct fts_header *)fw_data;
 			if (header->signature == FTSFILE_SIGNATURE) {
 				/* If FFU firmware version is lower than IC's version, do not run update routine */
-				if (strncmp(file_path, FTS_DEFAULT_SPU_FW, 20) == 0) {
+				if (type == TSP_TYPE_EXTERNAL_FW_SIGNED || type == TSP_TYPE_SPU_FW_SIGNED) {
 					/* digest 32, signature 512 TSP 3 */
 					ori_size = fw_size - SPU_METADATA_SIZE(TSP);
 
@@ -895,14 +928,26 @@ static int fts_load_fw_from_ums(struct fts_ts_info *info, const char *file_path)
 						kfree(fw_data);
 						goto alloc_err;
 					}
+				}
 
+				if (type == TSP_TYPE_SPU_FW_SIGNED) {
 					if ((info->fw_main_version_of_ic < (u16)header->ext_release_ver)
 								|| (info->config_version_of_ic < (u16)header->cfg_ver)
 								|| (info->fw_version_of_ic < (u16)header->fw_ver)) {
-						input_info(true, &info->client->dev, "%s: run ffu update\n", __func__);
+						input_info(true, &info->client->dev, "%s: run spu update\n", __func__);
 					} else {
 						error = 0;
-						input_info(true, &info->client->dev, "%s: skip ffu update\n", __func__);
+						input_info(true, &info->client->dev, "%s: skip spu update\n", __func__);
+						kfree(fw_data);
+						goto alloc_err;
+					}
+				} else if (type == TSP_TYPE_EXTERNAL_FW_SIGNED) {
+					if ((info->ic_name_of_ic == header->ic_name) &&
+							(info->project_id_of_ic == header->project_id)) {
+						input_info(true, &info->client->dev, "%s: run external fw update\n", __func__);
+					} else {
+						error = 0;
+						input_info(true, &info->client->dev, "%s: skip external fw update\n", __func__);
 						kfree(fw_data);
 						goto alloc_err;
 					}
@@ -964,10 +1009,14 @@ int fts_fw_update_on_hidden_menu(struct fts_ts_info *info, int update_type)
 		retval = fts_load_fw_from_kernel(info, info->firmware_name);
 		break;
 	case UMS:
-		retval = fts_load_fw_from_ums(info, FTS_DEFAULT_UMS_FW);
+#if defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+		retval = fts_load_fw_from_ums(info, TSP_TYPE_EXTERNAL_FW_SIGNED);
+#else
+		retval = fts_load_fw_from_ums(info, TSP_TYPE_EXTERNAL_FW);
+#endif
 		break;
 	case SPU:
-		retval = fts_load_fw_from_ums(info, FTS_DEFAULT_SPU_FW);
+		retval = fts_load_fw_from_ums(info, TSP_TYPE_SPU_FW_SIGNED);
 		break;
 	default:
 		input_err(true, &info->client->dev, "%s: Not support command[%d]\n",

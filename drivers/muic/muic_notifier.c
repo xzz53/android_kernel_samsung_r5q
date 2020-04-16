@@ -3,7 +3,7 @@
 #include <linux/notifier.h>
 #include <linux/muic/muic.h>
 #include <linux/muic/muic_notifier.h>
-
+#include <linux/of.h>
 #if defined(CONFIG_DRV_SAMSUNG)
 #include <linux/sec_class.h>
 #endif
@@ -41,6 +41,9 @@ static struct muic_notifier_struct muic_ccic_notifier;
 struct device *switch_device;
 static int notifier_head_init;
 static int muic_uses_new_noti;
+#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
+static int muic_one_binary = MUIC_ONE_DEFAULT;
+#endif
 #if defined(CONFIG_CCIC_S2MU004) || defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
 static int muic_ccic_uses_new_noti;
 #endif
@@ -296,11 +299,18 @@ void muic_pdic_notifier_attach_attached_dev(muic_attached_dev_t new_dev)
 {
 	pr_info("%s: (%d)\n", __func__, new_dev);
 
-#if defined(CONFIG_CCIC_S2MU004) || defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
-	__set_ccic_noti_cxt(MUIC_PDIC_NOTIFY_CMD_ATTACH, new_dev);
+#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
+	if (muic_one_binary == MUIC_ONE_DEFAULT) {
+		__set_noti_cxt(MUIC_PDIC_NOTIFY_CMD_ATTACH, new_dev);
 
-	/* muic's attached_device attach broadcast */
-	muic_ccic_notifier_notify();
+		/* muic's attached_device attach broadcast */
+		muic_notifier_notify();
+	} else {
+		__set_ccic_noti_cxt(MUIC_PDIC_NOTIFY_CMD_ATTACH, new_dev);
+
+		/* muic's attached_device attach broadcast */
+		muic_ccic_notifier_notify();
+	}
 #else
 	__set_noti_cxt(MUIC_PDIC_NOTIFY_CMD_ATTACH, new_dev);
 
@@ -313,11 +323,17 @@ void muic_pdic_notifier_detach_attached_dev(muic_attached_dev_t new_dev)
 {
 	pr_info("%s: (%d)\n", __func__, new_dev);
 
-#if defined(CONFIG_CCIC_S2MU004) || defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
-	__set_ccic_noti_cxt(MUIC_PDIC_NOTIFY_CMD_DETACH, new_dev);
+#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
+	if (muic_one_binary == MUIC_ONE_DEFAULT) {
+		__set_noti_cxt(MUIC_PDIC_NOTIFY_CMD_DETACH, muic_notifier.attached_dev);
+		/* muic's attached_device attach broadcast */
+		muic_notifier_notify();
+	} else {
+		__set_ccic_noti_cxt(MUIC_PDIC_NOTIFY_CMD_DETACH, new_dev);
 
-	/* muic's attached_device attach broadcast */
-	muic_ccic_notifier_notify();
+		/* muic's attached_device attach broadcast */
+		muic_ccic_notifier_notify();
+	}
 #else
 	__set_noti_cxt(MUIC_PDIC_NOTIFY_CMD_DETACH, muic_notifier.attached_dev);
 	/* muic's attached_device attach broadcast */
@@ -426,10 +442,39 @@ extern int manager_notifier_init(void);
 static int __init muic_notifier_init(void)
 {
 	int ret = 0;
-
+#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
+	struct device_node *np = NULL;
+	np = of_find_compatible_node(NULL, NULL, "maxim,max77705");
+	
+	muic_one_binary = ((np != NULL) ? MUIC_ONE_DEFAULT : MUIC_ONE_S2MU);
+#endif
 	pr_info("%s\n", __func__);
 
-#if defined(CONFIG_DRV_SAMSUNG) && !defined(CONFIG_MUIC_S2MU107) && !defined(CONFIG_MUIC_S2MU106)
+#if defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
+#if defined(CONFIG_DRV_SAMSUNG)
+	if (muic_one_binary == MUIC_ONE_DEFAULT) {
+		switch_device = sec_device_create(0, NULL, "switch");
+
+		if (IS_ERR(switch_device)) {
+			pr_err("(%s): failed to created device (switch_device)!\n",
+					__func__);
+			return -ENODEV;
+		}
+	}
+
+	if (muic_one_binary == MUIC_ONE_S2MU) {
+		muic_uses_new_noti = 1;
+
+		BLOCKING_INIT_NOTIFIER_HEAD(&(muic_notifier.notifier_call_chain));
+		__set_noti_cxt(0, ATTACHED_DEV_UNKNOWN_MUIC);
+
+		BLOCKING_INIT_NOTIFIER_HEAD(&(muic_ccic_notifier.notifier_call_chain));
+		__set_ccic_noti_cxt(0, ATTACHED_DEV_UNKNOWN_MUIC);
+		muic_ccic_uses_new_noti = 1;
+	}
+#endif
+#else
+#if defined(CONFIG_DRV_SAMSUNG)
 	switch_device = sec_device_create(0, NULL, "switch");
 
 	if (IS_ERR(switch_device)) {
@@ -438,15 +483,6 @@ static int __init muic_notifier_init(void)
 		return -ENODEV;
 	}
 #endif
-#if defined(CONFIG_CCIC_S2MU004) || defined(CONFIG_MUIC_S2MU107) || defined(CONFIG_MUIC_S2MU106)
-	muic_uses_new_noti = 1;
-
-	BLOCKING_INIT_NOTIFIER_HEAD(&(muic_notifier.notifier_call_chain));
-	__set_noti_cxt(0, ATTACHED_DEV_UNKNOWN_MUIC);
-
-	BLOCKING_INIT_NOTIFIER_HEAD(&(muic_ccic_notifier.notifier_call_chain));
-	__set_ccic_noti_cxt(0, ATTACHED_DEV_UNKNOWN_MUIC);
-	muic_ccic_uses_new_noti = 1;
 #endif
 	return ret;
 }

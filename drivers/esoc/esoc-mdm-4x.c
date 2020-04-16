@@ -17,6 +17,10 @@
 #include <soc/qcom/sysmon.h>
 #include "esoc-mdm.h"
 
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+#endif
+
 enum gpio_update_config {
 	GPIO_UPDATE_BOOTING_CONFIG = 1,
 	GPIO_UPDATE_RUNNING_CONFIG,
@@ -678,6 +682,12 @@ static int mdm_configure_ipc(struct mdm_ctrl *mdm, struct platform_device *pdev)
 						&mdm->ramdump_delay_ms);
 	if (ret)
 		mdm->ramdump_delay_ms = DEF_RAMDUMP_DELAY;
+
+#ifdef CONFIG_SEC_DEBUG
+	if (sec_debug_level() == ANDROID_DEBUG_LEVEL_LOW) 
+		mdm->ramdump_delay_ms = DEF_RAMDUMP_DELAY;
+#endif
+
 	/*
 	 * In certain scenarios, multiple esoc devices are monitoring
 	 * same AP2MDM_STATUS line. But only one of them will have a

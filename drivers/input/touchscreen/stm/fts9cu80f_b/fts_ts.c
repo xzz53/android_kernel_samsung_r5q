@@ -157,7 +157,7 @@ static ssize_t fts_secure_touch_enable_store(struct device *dev,
 	switch (value) {
 	case 0:
 		if (atomic_read(&info->st_enabled) == 0) {
-			input_err(true, &info->client->dev, "%s: secure_touch is not enabled, pending:%d\n",
+			input_err(true, &info->client->dev, "%s: already disabled, pending:%d\n",
 					__func__, atomic_read(&info->st_pending_irqs));
 			break;
 		}
@@ -175,19 +175,19 @@ static ssize_t fts_secure_touch_enable_store(struct device *dev,
 		complete(&info->st_powerdown);
 		complete(&info->st_interrupt);
 
-		input_info(true, &info->client->dev, "%s: secure_touch is disabled\n", __func__);
+		input_info(true, &info->client->dev, "%s: disabled\n", __func__);
 
 		break;
 
 	case 1:
 		if (info->reset_is_on_going) {
-			input_err(true, &info->client->dev, "%s: reset is on goning becuse i2c fail\n",
+			input_err(true, &info->client->dev, "%s: reset is on going becuse i2c fail\n",
 					__func__);
 			return -EBUSY;
 		}
 
 		if (atomic_read(&info->st_enabled)) {
-			input_err(true, &info->client->dev, "%s: secure_touch is already enabled, pending:%d\n",
+			input_err(true, &info->client->dev, "%s: already enabled, pending:%d\n",
 					__func__, atomic_read(&info->st_pending_irqs));
 			err = -EBUSY;
 			break;
@@ -215,7 +215,7 @@ static ssize_t fts_secure_touch_enable_store(struct device *dev,
 
 		fts_interrupt_set(info, INT_ENABLE);
 
-		input_info(true, &info->client->dev, "%s: secure_touch is enabled\n", __func__);
+		input_info(true, &info->client->dev, "%s: enabled\n", __func__);
 
 		break;
 
@@ -449,7 +449,6 @@ int fts_read_reg(struct fts_ts_info *info, u8 *reg, int cnum,
 
 	if (retry == 0) {
 		input_err(true, &info->client->dev, "%s: I2C read over retry limit\n", __func__);
-//		ret = -EIO;
 
 		if (info->debug_string & FTS_DEBUG_SEND_UEVENT)
 			sec_cmd_send_event_to_user(&info->sec, NULL, "RESULT=I2C");
@@ -593,13 +592,7 @@ int fts_check_custom_library(struct fts_ts_info *info)
 
 	fts_interrupt_set(info, INT_DISABLE);
 
-	ret = fts_write_reg(info, &regAdd[0], 3);
-	if (ret <= 0) {
-		input_err(true, &info->client->dev, "%s: failed. ret: %d\n", __func__, ret);
-		goto out;
-	}
-
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 0);
 	if (ret < 0)
 		goto out;
 
@@ -657,15 +650,14 @@ void fts_command(struct fts_ts_info *info, u8 cmd, bool checkEcho)
 	fts_interrupt_set(info, INT_DISABLE);
 
 	regAdd = cmd;
-	ret = fts_write_reg(info, &regAdd, 1);
-	input_info(true, &info->client->dev, "%s: (%02X), ret = %d\n", __func__, cmd, ret);
 
-	if (checkEcho) {
-		ret = fts_fw_wait_for_echo_event(info, &regAdd, 1);
-		if (ret < 0)
-			input_info(true, &info->client->dev,
-					"%s: Error to wait for event, ret = %d\n", __func__, cmd, ret);
-	}
+	if (checkEcho)
+		ret = fts_fw_wait_for_echo_event(info, &regAdd, 1, 0);
+	else
+		ret = fts_write_reg(info, &regAdd, 1);
+	if (ret < 0)
+		input_err(true, &info->client->dev,
+				"%s: failed to write command(0x%02X), ret = %d\n", __func__, cmd, ret);
 
 	fts_interrupt_set(info, INT_ENABLE);
 }
@@ -677,9 +669,7 @@ int fts_set_scanmode(struct fts_ts_info *info, u8 scan_mode)
 
 	fts_interrupt_set(info, INT_DISABLE);
 
-	fts_write_reg(info, &regAdd[0], 3);
-
-	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 0);
 	if (rc < 0) {
 		input_info(true, &info->client->dev, "%s: timeout, ret = %d\n", __func__, rc);
 		fts_interrupt_set(info, INT_ENABLE);
@@ -699,11 +689,7 @@ int fts_set_opmode(struct fts_ts_info *info, u8 mode)
 
 	fts_interrupt_set(info, INT_DISABLE);
 
-	ret = fts_write_reg(info, &regAdd[0], 2);
-	if (ret <= 0)
-		input_err(true, &info->client->dev, "%s: Failed to send command: %d", __func__, mode);
-
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2);
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 2, 0);
 	if (ret < 0) {
 		fts_interrupt_set(info, INT_ENABLE);
 		return ret;
@@ -815,6 +801,27 @@ static void fts_wirelesscharger_mode(struct fts_ts_info *info)
 	ret = fts_write_reg(info, regAdd, 2);
 	if (ret < 0)
 		input_err(true, &info->client->dev, "%s: failed. ret: %d\n", __func__, ret);
+}
+
+static int fts_set_sip_mode(struct fts_ts_info *info, u8 enable)
+{
+	u8 regAdd[3];
+	int ret;
+
+	regAdd[0] = 0xC1;
+	regAdd[1] = 0x00;
+	if (enable)
+		regAdd[2] = 0x01;
+	else
+		regAdd[2] = 0x00;
+
+	info->sip_mode = enable;
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, enable ? "enable" : "disable");
+	ret = fts_write_reg(info, regAdd, 3);
+	if (ret < 0)
+		input_err(true, &info->client->dev, "%s: failed. ret: %d\n", __func__, ret);
+
+	return ret;
 }
 
 void fts_change_scan_rate(struct fts_ts_info *info, u8 rate)
@@ -935,16 +942,8 @@ int fts_osc_trim_recovery(struct fts_ts_info *info)
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x00;
 	regAdd[2] = 0x05;
-	rc = fts_write_reg(info, &regAdd[0], 3);
-	if (rc < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to recover osc trim \n", __func__);
-		rc = -FTS_ERROR_BROKEN_OSC_TRIM;
-		goto out;
-	}
 
-	fts_delay(800);
-	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 800);
 	if (rc < 0) {
 		rc = -FTS_ERROR_BROKEN_OSC_TRIM;
 		goto out;
@@ -954,15 +953,8 @@ int fts_osc_trim_recovery(struct fts_ts_info *info)
 	regAdd[0] = 0xA4;
 	regAdd[1] = 0x05;
 	regAdd[2] = 0x04;
-	rc = fts_write_reg(info, &regAdd[0], 3);
-	if (rc < 0) {
-		input_err(true, &info->client->dev,
-				"%s: failed to save flash", __func__);
-		rc = -FTS_ERROR_BROKEN_OSC_TRIM;
-		goto out;
-	}
-	fts_delay(100);
-	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+
+	rc = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 100);
 	if (rc < 0) {
 		rc = -FTS_ERROR_BROKEN_OSC_TRIM;
 		goto out;
@@ -986,6 +978,8 @@ static int fts_wait_for_ready(struct fts_ts_info *info)
 	u8 data[FTS_EVENT_SIZE];
 	int retry = 0;
 	int err_cnt = 0;
+
+	mutex_lock(&info->wait_for);
 
 	fts_interrupt_set(info, INT_DISABLE);
 
@@ -1054,6 +1048,8 @@ static int fts_wait_for_ready(struct fts_ts_info *info)
 			data[4], data[5], data[6], data[7]);
 
 	fts_interrupt_set(info, INT_ENABLE);
+
+	mutex_unlock(&info->wait_for);
 
 	return rc;
 }
@@ -1128,10 +1124,7 @@ int fts_get_sysinfo_data(struct fts_ts_info *info, u8 sysinfo_addr, u8 read_cnt,
 	u8 regAdd[3] = { 0xA4, 0x06, 0x01 }; // request system information
 
 	fts_interrupt_set(info, INT_DISABLE);
-
-	fts_write_reg(info, &regAdd[0], 3);
-
-	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3);
+	ret = fts_fw_wait_for_echo_event(info, &regAdd[0], 3, 0);
 	if (ret < 0) {
 		input_err(true, &info->client->dev, "%s: timeout wait for event\n", __func__);
 		rc = -1;
@@ -1158,9 +1151,9 @@ int fts_get_sysinfo_data(struct fts_ts_info *info, u8 sysinfo_addr, u8 read_cnt,
 	}
 
 	memcpy(data, &buff[0], read_cnt);
+	kfree(buff);
 
 ERROR:
-	kfree(buff);
 	fts_interrupt_set(info, INT_ENABLE);
 	return rc;
 }
@@ -1219,12 +1212,27 @@ int fts_fix_active_mode(struct fts_ts_info *info, bool enable)
 	return ret;
 }
 
+static int fts_ts_set_prox_power_off(struct fts_ts_info *info, u8 prox)
+{
+	u8 data[2];
+	int ret;
+
+	data[0] = FTS_CMD_SET_PROX_POWER_OFF;
+	data[1] = prox;
+
+	ret = fts_write_reg(info, data, 2);
+	if (ret < 0)
+		input_err(true, &info->client->dev, "%s: failed set %d\n", __func__, prox);
+
+	return ret;
+}
+
 /* Added for samsung dependent codes such as Factory test,
  * Touch booster, Related debug sysfs.
  */
 #include "fts_sec.c"
 
-struct fts_ts_info *g_info;
+struct fts_ts_info *g_fts_info;
 
 static ssize_t fts_tsp_cmoffset_all_read(struct file *file, char __user *buf,
 					size_t len, loff_t *offset)
@@ -1238,11 +1246,11 @@ static ssize_t fts_tsp_cmoffset_all_read(struct file *file, char __user *buf,
 	int ret;
 #endif
 
-	if (!g_info) {
+	if (!g_fts_info) {
 		pr_err("%s %s: dev is null\n", SECLOG, __func__);
 		return 0;
 	}
-	info = g_info;
+	info = g_fts_info;
 
 
 	if (pos == 0) {
@@ -1250,15 +1258,15 @@ static ssize_t fts_tsp_cmoffset_all_read(struct file *file, char __user *buf,
 		ret = fts_get_cmoffset_dump(info, info->cmoffset_sdc_proc, OFFSET_FW_SDC);
 		if (ret < 0)
 			input_err(true, &info->client->dev,
-				"%s : fts_get_cmoffset_dump SDC fail use boot time value\n", __func__);
+				"%s: SDC fail use boot time value\n", __func__);
 		ret = fts_get_cmoffset_dump(info, info->cmoffset_sub_proc, OFFSET_FW_SUB);
 		if (ret < 0)
 			input_err(true, &info->client->dev,
-				"%s : fts_get_cmoffset_dump SUB fail use boot time value\n", __func__);
+				"%s: SUB fail use boot time value\n", __func__);
 		ret = fts_get_cmoffset_dump(info, info->cmoffset_main_proc, OFFSET_FW_MAIN);
 		if (ret < 0)
 			input_err(true, &info->client->dev,
-				"%s : fts_get_cmoffset_dump MAIN fail use boot time value\n", __func__);
+				"%s: MAIN fail use boot time value\n", __func__);
 #endif
 		retlen_sdc = strlen(info->cmoffset_sdc_proc);
 		retlen_sub = strlen(info->cmoffset_sub_proc);
@@ -1266,7 +1274,7 @@ static ssize_t fts_tsp_cmoffset_all_read(struct file *file, char __user *buf,
 
 		info->cmoffset_all_proc = kzalloc(info->proc_cmoffset_all_size, GFP_KERNEL);
 		if (!info->cmoffset_all_proc){
-			input_err(true, &info->client->dev, "%s : kzalloc fail (cmoffset_all_proc)\n", __func__);
+			input_err(true, &info->client->dev, "%s: kzalloc fail (cmoffset_all_proc)\n", __func__);
 			return count;
 		}
 
@@ -1276,7 +1284,7 @@ static ssize_t fts_tsp_cmoffset_all_read(struct file *file, char __user *buf,
 
 		retlen = strlen(info->cmoffset_all_proc);
 
-		input_info(true, &info->client->dev, "%s : retlen[%d], retlen_sdc[%d], retlen_sub[%d], retlen_main[%d]\n",
+		input_info(true, &info->client->dev, "%s: retlen[%d], retlen_sdc[%d], retlen_sub[%d], retlen_main[%d]\n",
 						__func__, retlen, retlen_sdc, retlen_sub, retlen_main);
 	}
 
@@ -1285,17 +1293,17 @@ static ssize_t fts_tsp_cmoffset_all_read(struct file *file, char __user *buf,
 
 	count = min(len, (size_t)(retlen - pos));
 
-	input_info(true, &info->client->dev, "%s : total:%d pos:%d count:%d\n", __func__, retlen, pos, count);
+	input_info(true, &info->client->dev, "%s: total:%d pos:%d count:%d\n", __func__, retlen, pos, count);
 
 	if (copy_to_user(buf, info->cmoffset_all_proc + pos, count)) {
-		input_err(true, &info->client->dev, "%s : copy_to_user error!\n", __func__, retlen, pos);
+		input_err(true, &info->client->dev, "%s: copy_to_user error!\n", __func__, retlen, pos);
 		return -EFAULT;
 	}
 
 	*offset += count;
 
 	if (count < len) {
-		input_info(true, &info->client->dev, "%s : print all & free cmoffset_all_proc [%d][%d]\n",
+		input_info(true, &info->client->dev, "%s: print all & free cmoffset_all_proc [%d][%d]\n",
 					__func__, retlen, offset);
 		if (info->cmoffset_all_proc)
 			kfree(info->cmoffset_all_proc);
@@ -1317,11 +1325,11 @@ static ssize_t fts_tsp_fail_hist_all_read(struct file *file, char __user *buf,
 	int ret;
 #endif
 
-	if (!g_info) {
+	if (!g_fts_info) {
 		pr_err("%s %s: dev is null\n", SECLOG, __func__);
 		return 0;
 	}
-	info = g_info;
+	info = g_fts_info;
 
 
 	if (pos == 0) {
@@ -1330,15 +1338,15 @@ static ssize_t fts_tsp_fail_hist_all_read(struct file *file, char __user *buf,
 		retlen_sdc = strlen(info->fail_hist_sdc_proc);
 		if (ret < 0)
 			input_err(true, &info->client->dev,
-				"%s : fts_get_fail_hist_dump SDC fail use boot time value\n", __func__);
+				"%s: SDC fail use boot time value\n", __func__);
 		ret = get_selftest_fail_hist_dump(info, info->fail_hist_sub_proc, OFFSET_FW_SUB);
 		if (ret < 0)
 			input_err(true, &info->client->dev,
-				"%s : fts_get_fail_hist_dump SUB fail use boot time value\n", __func__);
+				"%s: SUB fail use boot time value\n", __func__);
 		ret = get_selftest_fail_hist_dump(info, info->fail_hist_main_proc, OFFSET_FW_MAIN);
 		if (ret < 0)
 			input_err(true, &info->client->dev,
-				"%s : fts_get_fail_hist_dump MAIN fail use boot time value\n", __func__);
+				"%s: MAIN fail use boot time value\n", __func__);
 #endif
 		retlen_sdc = strlen(info->fail_hist_sdc_proc);
 		retlen_sub = strlen(info->fail_hist_sub_proc);
@@ -1346,7 +1354,7 @@ static ssize_t fts_tsp_fail_hist_all_read(struct file *file, char __user *buf,
 
 		info->fail_hist_all_proc = kzalloc(info->proc_fail_hist_all_size, GFP_KERNEL);
 		if (!info->fail_hist_all_proc){
-			input_err(true, &info->client->dev, "%s : kzalloc fail (fail_hist_all_proc)\n", __func__);
+			input_err(true, &info->client->dev, "%s: kzalloc fail (fail_hist_all_proc)\n", __func__);
 			return count;
 		}
 
@@ -1356,7 +1364,7 @@ static ssize_t fts_tsp_fail_hist_all_read(struct file *file, char __user *buf,
 
 		retlen = strlen(info->fail_hist_all_proc);
 
-		input_info(true, &info->client->dev, "%s : retlen[%d], retlen_sdc[%d], retlen_sub[%d], retlen_main[%d]\n",
+		input_info(true, &info->client->dev, "%s: retlen[%d], retlen_sdc[%d], retlen_sub[%d], retlen_main[%d]\n",
 						__func__, retlen, retlen_sdc, retlen_sub, retlen_main);
 	}
 
@@ -1365,17 +1373,17 @@ static ssize_t fts_tsp_fail_hist_all_read(struct file *file, char __user *buf,
 
 	count = min(len, (size_t)(retlen - pos));
 
-	input_info(true, &info->client->dev, "%s : total:%d pos:%d count:%d\n", __func__, retlen, pos, count);
+	input_info(true, &info->client->dev, "%s: total:%d pos:%d count:%d\n", __func__, retlen, pos, count);
 
 	if (copy_to_user(buf, info->fail_hist_all_proc + pos, count)) {
-		input_err(true, &info->client->dev, "%s : copy_to_user error!\n", __func__, retlen, pos);
+		input_err(true, &info->client->dev, "%s: copy_to_user error!\n", __func__, retlen, pos);
 		return -EFAULT;
 	}
 
 	*offset += count;
 
 	if (count < len) {
-		input_info(true, &info->client->dev, "%s : print all & free fail_hist_all_proc [%d][%d]\n",
+		input_info(true, &info->client->dev, "%s: print all & free fail_hist_all_proc [%d][%d]\n",
 					__func__, retlen, offset);
 		if (info->fail_hist_all_proc)
 			kfree(info->fail_hist_all_proc);
@@ -1462,7 +1470,7 @@ static void fts_init_proc(struct fts_ts_info *info)
 	}
 	proc_set_size(entry_fail_hist_all, info->proc_fail_hist_all_size);
 
-	g_info = info;
+	g_fts_info = info;
 	input_info(true, &info->client->dev, "%s: done\n", __func__);
 	return;
 
@@ -1869,6 +1877,11 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 	break;
 
 		case FTS_COORDINATE_EVENT:
+			if (info->fts_power_state < FTS_POWER_STATE_ACTIVE) {
+				input_info(true, &info->client->dev, "%s: opmode is not normal\n");
+				break;
+			}
+
 			p_event_coord = (struct fts_event_coordinate *) event_buff;
 
 			TouchID = p_event_coord->tid;
@@ -1881,8 +1894,6 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 
 			info->finger[TouchID].prev_ttype = info->finger[TouchID].ttype;
 			prev_action = info->finger[TouchID].action;
-			info->finger[TouchID].p_x = info->finger[TouchID].x;
-			info->finger[TouchID].p_y = info->finger[TouchID].y;
 			info->finger[TouchID].id = TouchID;
 			info->finger[TouchID].action = p_event_coord->tchsta;
 			info->finger[TouchID].x = (p_event_coord->x_11_4 << 4) | (p_event_coord->x_3_0);
@@ -1974,6 +1985,9 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 
 					info->touch_count++;
 					info->all_finger_count++;
+
+					info->finger[TouchID].p_x = info->finger[TouchID].x;
+					info->finger[TouchID].p_y = info->finger[TouchID].y;
 
 					input_mt_slot(info->input_dev, TouchID);
 					input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 1);
@@ -2077,7 +2091,7 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 
 
 				if (info->finger[TouchID].ttype != info->finger[TouchID].prev_ttype) {
-					input_info(true, &info->client->dev, "%s : tID:%d ttype(%c->%c) : %s\n",
+					input_info(true, &info->client->dev, "%s: tID:%d ttype(%c->%c) : %s\n",
 							__func__, info->finger[TouchID].id,
 							finger_mode[info->finger[TouchID].prev_ttype],
 							finger_mode[info->finger[TouchID].ttype],
@@ -2112,10 +2126,10 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 					input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 0);
 
 				} else if (p_gesture_status->gesture_id == FTS_SPONGE_EVENT_GESTURE_ID_DOUBLETAP_TO_WAKEUP) {
-					input_report_key(info->input_dev, KEY_HOMEPAGE, 1);
+					input_report_key(info->input_dev, KEY_WAKEUP, 1);
 					input_sync(info->input_dev);
-					input_report_key(info->input_dev, KEY_HOMEPAGE, 0);
-					input_info(true, &info->client->dev, "%s: Dobule Tap Wake up\n", __func__);
+					input_report_key(info->input_dev, KEY_WAKEUP, 0);
+					input_info(true, &info->client->dev, "%s: Double Tap Wake up\n", __func__);
 					break;
 				}
 			} else if (p_gesture_status->stype == FTS_SPONGE_EVENT_SWIPE_UP) {
@@ -2599,6 +2613,7 @@ static int fts_parse_dt(struct i2c_client *client)
 	pdata->sync_reportrate_120 = of_property_read_bool(np, "sync-reportrate-120");
 	pdata->support_open_short_test = of_property_read_bool(np, "support_open_short_test");
 	pdata->support_mis_calibration_test = of_property_read_bool(np, "support_mis_calibration_test");
+	pdata->support_hall_ic = of_property_read_bool(np, "support_hall_ic");
 
 	of_property_read_u32(np, "stm,bringup", &pdata->bringup);
 
@@ -2842,7 +2857,7 @@ static void fts_set_input_prop(struct fts_ts_info *info, struct input_dev *dev, 
 	set_bit(BTN_TOUCH, dev->keybit);
 	set_bit(BTN_TOOL_FINGER, dev->keybit);
 	set_bit(KEY_BLACK_UI_GESTURE, dev->keybit);
-	set_bit(KEY_HOMEPAGE, dev->keybit);
+	set_bit(KEY_WAKEUP, dev->keybit);
 	set_bit(KEY_INT_CANCEL, dev->keybit);
 
 	if (info->board->support_sidegesture) {
@@ -2962,6 +2977,7 @@ static int fts_probe(struct i2c_client *client, const struct i2c_device_id *idp)
 	mutex_init(&info->irq_mutex);
 	mutex_init(&info->eventlock);
 	mutex_init(&info->status_mutex);
+	mutex_init(&info->wait_for);
 	init_completion(&info->resume_done);
 	complete_all(&info->resume_done);
 
@@ -3096,14 +3112,16 @@ static int fts_probe(struct i2c_client *client, const struct i2c_device_id *idp)
 
 	sec_input_register_notify(&info->nb, fts_notifier_call);
 
-#ifdef CONFIG_FOLDER_HALL
-	/* Hall IC notify priority -> ftn -> register */
 	info->flip_status = -1;
 	info->flip_status_current = FTS_STATUS_UNFOLDING;	// default : 0 unfolding
+#ifdef CONFIG_FOLDER_HALL
+	/* Hall IC notify priority -> ftn -> register */
 	info->hall_ic_nb.priority = 1;
 	info->hall_ic_nb.notifier_call = fts_hall_ic_notify;
-//	hall_ic_register_notify(&info->hall_ic_nb);
-//	input_info(true, &info->client->dev, "%s: hall ic register\n", __func__);
+	if (info->board->support_hall_ic) {
+		hall_ic_register_notify(&info->hall_ic_nb);
+		input_info(true, &info->client->dev, "%s: hall ic register\n", __func__);
+	}
 #endif
 #endif
 
@@ -3181,7 +3199,7 @@ err_input_allocate_device:
 	if (gpio_is_valid(info->board->irq_gpio))
 		gpio_free(info->board->irq_gpio);
 
-	g_info = NULL;
+	g_fts_info = NULL;
 	kfree(info);
 err_get_drv_data:
 err_setup_drv_data:
@@ -3252,7 +3270,7 @@ static int fts_remove(struct i2c_client *client)
 	if (info->board->power)
 		info->board->power(info, false);
 
-	g_info = NULL;
+	g_fts_info = NULL;
 	kfree(info);
 
 	return 0;
@@ -3340,7 +3358,9 @@ out:
 	schedule_work(&info->work_print_info.work);
 	info->flip_status_prev = info->flip_status_current;
 
-	sec_input_notify(&info->nb, SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_ON);
+	if (!info->board->support_hall_ic)
+		sec_input_notify(&info->nb, SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_ON);
+
 	return 0;
 }
 
@@ -3408,6 +3428,8 @@ static void fts_input_close(struct input_dev *dev)
 
 	mutex_unlock(&info->device_mutex);
 
+	if (!info->board->support_hall_ic)
+		sec_input_notify(&info->nb, SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_OFF);
 }
 #endif
 
@@ -3587,8 +3609,6 @@ void fts_release_all_finger(struct fts_ts_info *info)
 	input_report_key(info->input_dev, BTN_TOUCH, 0);
 	input_report_key(info->input_dev, BTN_TOOL_FINGER, 0);
 
-	input_report_key(info->input_dev, KEY_HOMEPAGE, 0);
-
 	if (info->board->support_sidegesture) {
 		input_report_key(info->input_dev, KEY_SIDE_GESTURE, 0);
 		input_report_key(info->input_dev, KEY_SIDE_GESTURE_RIGHT, 0);
@@ -3757,7 +3777,8 @@ static void fts_read_info_work(struct work_struct *work)
 	/* sec_touchscreen is opened by KGSL(handler registered) in probe time
 	 * so, 
 	 */
-	sec_input_notify(&info->nb, SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_ON);
+	if (!info->board->support_hall_ic)
+		sec_input_notify(&info->nb, SEC_INPUT_CUSTOM_NOTIFIER_MAIN_TOUCH_ON);
 
 	input_info(true, &info->client->dev, "%s done\n", __func__);
 
@@ -3768,78 +3789,67 @@ void fts_chk_tsp_ic_status(struct fts_ts_info *info, int call_pos)
 	mutex_lock(&info->status_mutex);
 
 	input_info(true, &info->client->dev,
-			"%s : START : pos[%d] power_state[0x%X] lowpower_flag[0x%X] %sfolding\n",
+			"%s: START: pos[%d] power_state[0x%X] lowpower_flag[0x%X] %sfolding\n",
 			__func__, call_pos, info->fts_power_state, info->lowpower_flag,
 			info->flip_status_current ? "": "un");
 
 	if (call_pos == FTS_STATE_CHK_POS_OPEN) {
-		input_dbg(true, &info->client->dev, "%s : OPEN  : Notthing\n", __func__);
+		input_dbg(true, &info->client->dev, "%s: OPEN : Nothing\n", __func__);
 
 	} else if (call_pos == FTS_STATE_CHK_POS_CLOSE) {
-		input_dbg(true, &info->client->dev, "%s : CLOSE : Notthing\n", __func__);
+		input_dbg(true, &info->client->dev, "%s: CLOSE: Nothing\n", __func__);
 
 	} else if (call_pos == FTS_STATE_CHK_POS_HALL) {
 		if (info->fts_power_state == FTS_POWER_STATE_LOWPOWER && info->flip_status_current == FTS_STATUS_FOLDING) {
-			input_info(true, &info->client->dev, "%s : HALL  : TSP IC LP => IC OFF\n", __func__);
+			input_info(true, &info->client->dev, "%s: HALL : TSP IC LP => IC OFF\n", __func__);
 			fts_stop_device(info);
 
 		} else {
-			input_info(true, &info->client->dev, "%s : HALL  : Notthing\n", __func__);
+			input_info(true, &info->client->dev, "%s: HALL : Nothing\n", __func__);
 		}
 
 	} else if (call_pos == FTS_STATE_CHK_POS_SYSFS) {
 		if (info->rear_selfie_mode) {
 			if (info->fts_power_state == FTS_POWER_STATE_LOWPOWER) {
-				input_info(true, &info->client->dev, "%s : SYSFS : Rear Selfie mode => TSP IC OFF\n",
+				input_info(true, &info->client->dev, "%s: SYSFS: Rear Selfie mode => TSP IC OFF\n",
 									__func__);
 				fts_stop_device(info);
 			} else {
-				input_info(true, &info->client->dev, "%s : SYSFS : Rear Selfie mode nothing!\n", __func__);
+				input_info(true, &info->client->dev, "%s: SYSFS: Rear Selfie mode nothing!\n", __func__);
 			}
 		} else if (info->flip_status_current == FTS_STATUS_UNFOLDING) {
 			if (info->fts_power_state == FTS_POWER_STATE_POWERDOWN && info->lowpower_flag) {
-				input_info(true, &info->client->dev, "%s : SYSFS : TSP IC OFF => LP mode[0x%X]\n",
+				input_info(true, &info->client->dev, "%s: SYSFS: TSP IC OFF => LP mode[0x%X]\n",
 								__func__, info->lowpower_flag);
 				fts_start_device(info);
 				fts_set_lowpowermode(info, TO_LOWPOWER_MODE);
 
 			} else if (info->fts_power_state == FTS_POWER_STATE_LOWPOWER && info->lowpower_flag == 0) {
-				input_info(true, &info->client->dev, "%s : SYSFS : LP mode [0x0] => TSP IC OFF\n",
+				input_info(true, &info->client->dev, "%s: SYSFS: LP mode [0x0] => TSP IC OFF\n",
 								__func__);
 				fts_stop_device(info);
-			}
-#if 0
-			else if (info->fts_power_state == FTS_POWER_STATE_LOWPOWER && info->lowpower_flag != 0) {
-				if (info->lowpower_flag & FTS_MODE_AOD) {
-					input_info(true, &info->client->dev, "%s: SYSFS lpmode call sync base scan\n", __func__);
-					fts_set_hsync_scanmode(info, FTS_CMD_LPM_AOD_ON);
-
-				} else {
-					input_info(true, &info->client->dev, "%s: SYSFS lpmode call async base scan\n", __func__);
-					fts_set_hsync_scanmode(info, FTS_CMD_LPM_AOD_OFF);
-				}
-				fts_set_lowpowermode(info, TO_LOWPOWER_MODE);
-			}
-#endif
-			else {
-				input_info(true, &info->client->dev, "%s : SYSFS : nothing!\n", __func__);
+			} else {
+				input_info(true, &info->client->dev, "%s: SYSFS: set lowpower_flag again[0x%X]\n",
+								__func__, info->lowpower_flag);
+				info->fts_write_to_sponge(info, FTS_CMD_SPONGE_OFFSET_MODE,
+						&info->lowpower_flag, sizeof(info->lowpower_flag));
 			}
 		} else {
-			input_info(true, &info->client->dev, "%s : SYSFS : folding nothing[0x%X]\n", __func__, info->lowpower_flag);
+			input_info(true, &info->client->dev, "%s: SYSFS: folding nothing[0x%X]\n", __func__, info->lowpower_flag);
 		}
 	} else {
-		input_info(true, &info->client->dev, "%s : ETC   : nothing!\n", __func__);
+		input_info(true, &info->client->dev, "%s: ETC  : nothing!\n", __func__);
 	}
 
-	input_info(true, &info->client->dev, "%s : END   : pos[%d] power_state[0x%X] lowpower_flag[0x%X]\n",
+	input_info(true, &info->client->dev, "%s: END  : pos[%d] power_state[0x%X] lowpower_flag[0x%X]\n",
 					__func__, call_pos, info->fts_power_state, info->lowpower_flag);
 
 	mutex_unlock(&info->status_mutex);
 }
 
 /* optional reg : SEC_TS_CMD_LPM_AOD_OFF_ON(0x9B)	*/
-/* 0 : Async base scan (default on lp mode)			*/
-/* 1 : sync base scan								*/
+/* 0 : Async base scan (default on lp mode)		*/
+/* 1 : sync base scan				*/
 int fts_set_hsync_scanmode(struct fts_ts_info *info, u8 mode)
 {
 	int ret = 0;
@@ -3889,6 +3899,9 @@ int fts_set_lowpowermode(struct fts_ts_info *info, u8 mode)
 			fts_panel_ito_test(info, OPEN_SHORT_CRACK_TEST);
 		info->read_ito = false;
 
+		if (info->prox_power_off)
+			fts_ts_set_prox_power_off(info, 1);
+
 		fts_set_opmode(info, FTS_OPMODE_LOWPOWER);
 		info->fts_power_state = FTS_POWER_STATE_LOWPOWER;
 
@@ -3904,6 +3917,7 @@ int fts_set_lowpowermode(struct fts_ts_info *info, u8 mode)
 #endif
 
 	} else {
+		fts_ts_set_prox_power_off(info, 0);
 
 		ret = fts_set_opmode(info, FTS_OPMODE_NORMAL);
 		if (ret < 0) {
