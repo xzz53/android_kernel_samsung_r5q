@@ -802,6 +802,10 @@ ssize_t samsung_uvdm_out_request_message(void *data, size_t size)
 				pr_err("%s tiemout \n",__func__);
 				return -ETIME;
 			}
+			if (manager->uvdm_error) {
+				manager->uvdm_first_req = false;
+				return manager->uvdm_error;
+			}
 			accumulated_data_size += cur_set_data;
 			remained_data_size -= cur_set_data;
 			if (manager->uvdm_first_req)
@@ -868,6 +872,10 @@ int samsung_uvdm_in_request_message(void *data)
 		if (time_left <= 0) {
 			pr_err("%s timeout\n", __func__);
 			return -ETIME;
+		}
+		if (manager->uvdm_error) {
+			manager->uvdm_first_req = false;
+			return manager->uvdm_error;
 		}
 
 		/* read data */
@@ -936,7 +944,7 @@ void usbpd_manager_receive_samsung_uvdm_message(struct usbpd_data *pd_data)
 	data_obj_type		uvdm_data_obj[USBPD_MAX_COUNT_MSG_OBJECT];
 	struct usbpd_manager_data *manager = &pd_data->manager;
 	s_uvdm_header SEC_UVDM_RES_HEADER;
-	//s_uvdm_header SEC_UVDM_HEADER;
+	s_tx_header SEC_UVDM_TX_HEADER;
 	s_rx_header SEC_UVDM_RX_HEADER;
 	uvdm_msg_header.word = policy->rx_msg_header.word;
 
@@ -945,44 +953,96 @@ void usbpd_manager_receive_samsung_uvdm_message(struct usbpd_data *pd_data)
 		uvdm_data_obj[i].object = policy->rx_data_obj[i].object;
 
 	uvdm_msg_header.word = policy->rx_msg_header.word;
+	manager->uvdm_error = 0;
 
-	pr_info("%s dir %s \n", __func__, (manager->uvdm_dir==DIR_OUT)?"OUT":"IN");
+	pr_info("%s dir %s \n", __func__, (manager->uvdm_dir == DIR_OUT) ? "OUT":"IN");
 	if (manager->uvdm_dir == DIR_OUT) {
 		if (manager->uvdm_first_req) {
 			SEC_UVDM_RES_HEADER.object = uvdm_data_obj[1].object;
 			if (SEC_UVDM_RES_HEADER.data_type == TYPE_LONG) {
 				if (SEC_UVDM_RES_HEADER.cmd_type == RES_ACK) {
 					SEC_UVDM_RX_HEADER.object = uvdm_data_obj[2].object;
-					if (SEC_UVDM_RX_HEADER.result_value != RX_ACK)
-						pr_err("%s Busy or Nak received.\n", __func__);
-				} else
-					pr_err("%s Response type is wrong.\n", __func__);
-			} else {
-				if ( SEC_UVDM_RES_HEADER.cmd_type == RES_ACK)
-					pr_err("%s Short packet: ack received\n", __func__);
-				else
-					pr_err("%s Short packet: Response type is wrong\n", __func__);
+					if (SEC_UVDM_RX_HEADER.result_value == RX_ACK) {
+						/* do nothing */
+					} else if (SEC_UVDM_RX_HEADER.result_value == RX_NAK) {
+						pr_err("%s DIR_OUT RX_NAK received\n", __func__);
+						manager->uvdm_error = -ENODATA;
+					} else if (SEC_UVDM_RX_HEADER.result_value == RX_BUSY) {
+						pr_err("%s DIR_OUT RX_BUSY received\n", __func__);
+						manager->uvdm_error = -EBUSY;
+					} else {
+						pr_err("%s DIR_OUT Undefined RX value\n", __func__);
+						manager->uvdm_error = -EPROTO;
+					}
+				} else if (SEC_UVDM_RES_HEADER.cmd_type == RES_NAK) {
+					pr_err("%s DIR_OUT RES_NAK received\n", __func__);
+					manager->uvdm_error = -ENODATA;
+				} else if (SEC_UVDM_RES_HEADER.cmd_type == RES_BUSY) {
+					pr_err("%s DIR_OUT RES_BUSY received\n", __func__);
+					manager->uvdm_error = -EBUSY;
+				} else {
+					pr_err("%s DIR_OUT Undefined RES value\n", __func__);
+					manager->uvdm_error = -EPROTO;
+				}
+			} else { /* TYPE_SHORT */
+				if (SEC_UVDM_RES_HEADER.cmd_type == RES_ACK) {
+					/* do nothing */
+				} else if (SEC_UVDM_RES_HEADER.cmd_type == RES_NAK) {
+					pr_err("%s DIR_OUT SHORT RES_NAK received\n", __func__);
+					manager->uvdm_error = -ENODATA;
+				} else if (SEC_UVDM_RES_HEADER.cmd_type == RES_BUSY) {
+					pr_err("%s DIR_OUT SHORT RES_BUSY received\n", __func__);
+					manager->uvdm_error = -EBUSY;
+				} else {
+					pr_err("%s DIR_OUT Undefined RES value\n", __func__);
+					manager->uvdm_error = -EPROTO;
+				}
 			}
-		/* Dir: out */
-		} else {
+		} else { /* after 2nd packet for TYPE_LONG */
 			SEC_UVDM_RX_HEADER.object = uvdm_data_obj[1].object;
-			if (SEC_UVDM_RX_HEADER.result_value != RX_ACK)
-				pr_err("%s Busy or Nak received.\n", __func__);
+			if (SEC_UVDM_RX_HEADER.result_value == RX_ACK) {
+				/* do nothing */
+			} else if (SEC_UVDM_RX_HEADER.result_value == RX_NAK) {
+				pr_err("%s DIR_OUT RX_NAK received\n", __func__);
+				manager->uvdm_error = -ENODATA;
+			} else if (SEC_UVDM_RX_HEADER.result_value == RX_BUSY) {
+				pr_err("%s DIR_OUT RX_BUSY received\n", __func__);
+				manager->uvdm_error = -EBUSY;
+			} else {
+				pr_err("%s DIR_OUT Undefined RX value\n", __func__);
+				manager->uvdm_error = -EPROTO;
+			}
 		}
 		complete(&manager->uvdm_out_wait);
-	} else {
-		if (manager->uvdm_first_req) {
+		pr_err("%s DIR_OUT complete!\n", __func__);
+	}else if (manager->uvdm_dir == DIR_IN) {
+		if (manager->uvdm_first_req) { /* LONG and SHORT response is same */
 			SEC_UVDM_RES_HEADER.object = uvdm_data_obj[1].object;
-			if (SEC_UVDM_RES_HEADER.cmd_type != RES_ACK) {
-				pr_err("%s Busy or Nak received.\n", __func__);
-				return;
+			if (SEC_UVDM_RES_HEADER.cmd_type == RES_ACK) {
+				pr_err("%s DIR_IN 1st Response\n", __func__);
+			} else if (SEC_UVDM_RES_HEADER.cmd_type == RES_NAK) {
+				pr_err("%s DIR_IN SEC_UVDM_RESPONDER_NAK received\n", __func__);
+				manager->uvdm_error = -ENODATA;
+			} else if (SEC_UVDM_RES_HEADER.cmd_type == RES_BUSY) {
+				pr_err("%s DIR_IN SEC_UVDM_RESPONDER_BUSY received\n", __func__);
+				manager->uvdm_error = -EBUSY;
+			} else {
+				pr_err("%s DIR_IN Undefined RESPONDER value\n", __func__);
+				manager->uvdm_error = -EPROTO;
 			}
+		} else {
+			/* don't have ack packet after 2nd sec_tx_data_header */
+			SEC_UVDM_TX_HEADER.object = uvdm_data_obj[1].object;
+			if (SEC_UVDM_TX_HEADER.object != 0)
+				pr_err("%s DIR_IN %dth Response\n", __func__, SEC_UVDM_TX_HEADER.order_cur_set);
+			else
+				pr_err("%s DIR_IN Last Response. It's zero\n", __func__);
 		}
-
 		complete(&manager->uvdm_in_wait);
+		pr_err("%s DIR_IN complete!\n", __func__);
+	} else {
+		pr_err("%s Never Call!!!\n", __func__);
 	}
-
-	return;
 }
 
 void usbpd_manager_plug_attach(struct device *dev, muic_attached_dev_t new_dev)
@@ -1694,6 +1754,7 @@ void usbpd_init_manager_val(struct usbpd_data *pd_data)
 	manager->Standard_Vendor_ID = 0;
 	manager->prev_available_pdo = 0;
 	manager->ps_rdy = 0;
+	manager->uvdm_error = 0;
 	reinit_completion(&manager->uvdm_out_wait);
 	reinit_completion(&manager->uvdm_in_wait);
 	reinit_completion(&manager->psrdy_wait);

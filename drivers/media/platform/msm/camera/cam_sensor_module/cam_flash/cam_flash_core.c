@@ -43,12 +43,6 @@ static int __init sec_hw_rev_setup(char *p)
 }
 early_param("androidboot.revision", sec_hw_rev_setup);
 
-static unsigned int get_hw_rev(void)
-{
-	return system_rev;
-}
-unsigned int hw_rev;
-
 static int cam_flash_prepare(struct cam_flash_ctrl *flash_ctrl,
 	bool regulator_enable)
 {
@@ -518,22 +512,21 @@ static int cam_flash_ops(struct cam_flash_ctrl *flash_ctrl,
 
 int cam_flash_off(struct cam_flash_ctrl *flash_ctrl)
 {
-	hw_rev = get_hw_rev();
-
 	if (!flash_ctrl) {
 		CAM_ERR(CAM_FLASH, "Flash control Null");
 		return -EINVAL;
 	}
-	CAM_ERR(CAM_FLASH, "off hw_rev: %d", hw_rev);
-#if defined(CONFIG_LEDS_S2MU107_FLASH) || defined(CONFIG_LEDS_S2MU106_FLASH)
-	if(hw_rev < 6){
+	CAM_ERR(CAM_FLASH, "off system_rev: %d", system_rev);
+
+#if defined(CONFIG_LEDS_S2MU107_FLASH)
+	if (system_rev < 6) {
 		ext_pmic_cam_flash_ctrl(CAMERA_SENSOR_FLASH_OP_OFF, 0);
 		return 0;
 	}
-	else{
-		ext_pmic_cam_fled_ctrl(CAMERA_SENSOR_FLASH_OP_OFF, 0);
-		return 0;
-	}
+#endif
+#if defined(CONFIG_LEDS_S2MU106_FLASH)
+	ext_pmic_cam_fled_ctrl(CAMERA_SENSOR_FLASH_OP_OFF, 0);
+	return 0;
 #endif
 
 	if (flash_ctrl->switch_trigger)
@@ -547,22 +540,20 @@ EXPORT_SYMBOL(cam_flash_off);
 
 int cam_torch_off(struct cam_flash_ctrl *flash_ctrl)
 {
-	hw_rev = get_hw_rev();
-
 	if (!flash_ctrl) {
 		CAM_ERR(CAM_FLASH, "Flash control Null");
 		return -EINVAL;
 	}
 
-#if defined(CONFIG_LEDS_S2MU107_FLASH) || defined(CONFIG_LEDS_S2MU106_FLASH)
-	if(hw_rev < 6){
+#if defined(CONFIG_LEDS_S2MU107_FLASH)
+	if (system_rev < 6) {
 		ext_pmic_cam_flash_ctrl(CAMERA_SENSOR_FLASH_OP_OFF, 0);
 		return 0;
 	}
-	else{
-		ext_pmic_cam_fled_ctrl(CAMERA_SENSOR_FLASH_OP_OFF, 0);
-		return 0;
-	}
+#endif
+#if defined(CONFIG_LEDS_S2MU106_FLASH)
+	ext_pmic_cam_fled_ctrl(CAMERA_SENSOR_FLASH_OP_OFF, 0);
+	return 0;
 #endif
 
 	if (flash_ctrl->switch_trigger)
@@ -577,21 +568,21 @@ int cam_flash_low(
 	struct cam_flash_frame_setting *flash_data)
 {
 	int i = 0, rc = 0;
-	hw_rev = get_hw_rev();
 
 	if (!flash_data) {
 		CAM_ERR(CAM_FLASH, "Flash Data Null");
 		return -EINVAL;
 	}
-#if defined(CONFIG_LEDS_S2MU107_FLASH) || defined(CONFIG_LEDS_S2MU106_FLASH)
-	if(hw_rev < 6){
+
+#if defined(CONFIG_LEDS_S2MU107_FLASH)
+	if (system_rev < 6) {
 		ext_pmic_cam_flash_ctrl(flash_data->opcode, flash_data->led_current_ma[0]);
 		return 0;
 	}
-	else{
-		ext_pmic_cam_fled_ctrl(flash_data->opcode, flash_data->led_current_ma[0]);
-		return 0;
-	}
+#endif
+#if defined(CONFIG_LEDS_S2MU106_FLASH)
+	ext_pmic_cam_fled_ctrl(flash_data->opcode, flash_data->led_current_ma[0]);
+	return 0;
 #endif
 
 	for (i = 0; i < flash_ctrl->flash_num_sources; i++)
@@ -614,21 +605,21 @@ static int cam_flash_high(
 	struct cam_flash_frame_setting *flash_data)
 {
 	int i = 0, rc = 0;
-	hw_rev = get_hw_rev();
 
 	if (!flash_data) {
 		CAM_ERR(CAM_FLASH, "Flash Data Null");
 		return -EINVAL;
 	}
-#if defined(CONFIG_LEDS_S2MU107_FLASH) || defined(CONFIG_LEDS_S2MU106_FLASH)
-	if(hw_rev < 6){
+
+#if defined(CONFIG_LEDS_S2MU107_FLASH)
+	if (system_rev < 6) {
 		ext_pmic_cam_flash_ctrl(flash_data->opcode, flash_data->led_current_ma[0]);
 		return 0;
 	}
-	else{
-		ext_pmic_cam_fled_ctrl(flash_data->opcode, flash_data->led_current_ma[0]);
-		return 0;
-	}
+#endif
+#if defined(CONFIG_LEDS_S2MU106_FLASH)
+	ext_pmic_cam_fled_ctrl(flash_data->opcode, flash_data->led_current_ma[0]);
+	return 0;
 #endif
 
 	for (i = 0; i < flash_ctrl->torch_num_sources; i++)

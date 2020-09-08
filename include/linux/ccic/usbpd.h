@@ -480,6 +480,7 @@ typedef struct usbpd_phy_ops {
 	int    (*vbus_on_check)(void *);
 	int		(*get_side_check)(void *_data);
 	int    (*set_rp_control)(void *, int);
+	int    (*set_chg_lv_mode)(void *, int);
 #if defined(CONFIG_TYPEC)
 	void	(*set_pwr_opmode)(void *, int);
 #endif
@@ -595,6 +596,7 @@ struct usbpd_manager_data {
 	struct completion uvdm_in_wait;
 	struct completion psrdy_wait;
 	bool pn_flag;
+	int uvdm_error;
 
 	uint16_t Vendor_ID;
 	uint16_t Product_ID;

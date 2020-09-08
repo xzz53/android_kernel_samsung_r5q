@@ -168,7 +168,7 @@ static ssize_t show_last_dcvs(struct device *dev,
 {
 	ssize_t info_size = 0;
 	unsigned int reset_reason;
-	char *prefix[MAX_CLUSTER_NUM] = { "L3", "SC", "GC" };
+	char *prefix[MAX_CLUSTER_NUM] = { "L3", "SC", "GC", "GP"};
 	size_t i;
 
 	if (!phealth)
@@ -1243,9 +1243,6 @@ static int sec_errp_extra_show(struct seq_file *m, void *v)
 	if (!__is_valid_reset_reason(reset_reason))
 		goto out;
 
-	if (reset_reason == USER_UPLOAD_CAUSE_SMPL)
-		goto out;
-
 	p_rst_exinfo = kmalloc(sizeof(rst_exinfo_t), GFP_KERNEL);
 	if (!p_rst_exinfo)
 		goto out;
@@ -1259,6 +1256,14 @@ static int sec_errp_extra_show(struct seq_file *m, void *v)
 
 	offset += scnprintf((char*)(buf + offset), EXTEND_RR_SIZE - offset,
 			"RWC:%d", sec_debug_get_reset_write_cnt());
+
+	if (reset_reason == USER_UPLOAD_CAUSE_SMPL) {
+		if (strstr(p_kinfo->panic_buf, "SMPL")) {
+			offset += scnprintf((char*)(buf + offset), EXTEND_RR_SIZE - offset,
+				" PANIC:%s", p_kinfo->panic_buf);
+		}
+		goto out;
+	}
 
 	sec_debug_upload_cause_str(p_kinfo->upload_cause,
 			upload_cause_str, sizeof(upload_cause_str));
@@ -1290,7 +1295,7 @@ out:
 	kfree(p_rst_exinfo);
 
 	if (offset != 0)
-		seq_printf(m, buf);
+		seq_puts(m, buf);
 
 	return 0;
 }
@@ -1336,7 +1341,7 @@ static int __init sec_hw_param_init(void)
 	struct device *sec_hw_param_dev;
 	struct device *sec_reset_reason_dev;
 	int err_hw_param;
-	int err_errp_extra;
+	int err_errp_extra = 0;
 
 	dbg_partition_notifier_register(&sec_hw_param_dbg_part_notifier);
 

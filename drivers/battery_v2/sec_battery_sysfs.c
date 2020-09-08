@@ -817,84 +817,12 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 	case BATT_INBAT_VOLTAGE:
 	case BATT_INBAT_VOLTAGE_OCV:
 		if(battery->pdata->support_fgsrc_change == true) {
-			int j, is_lsi;
-
-			is_lsi = (!strcmp(battery->pdata->fuelgauge_name, "s2mu106-fuelgauge") ||
-				!strcmp(battery->pdata->fuelgauge_name, "s2mu107-fuelgauge")) ? 1 : 0;
-
-			if (is_lsi) {
-				value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_ON;
-				psy_do_property(battery->pdata->fgsrc_switch_name, set,
-						POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
-
-				mdelay(4000); // sampling time
-
-				for (j = 0; j < 10; j++) {
-					psy_do_property(battery->pdata->fuelgauge_name, get,
-								POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
-					pr_info("%s: ocv_data[%d]: %d\n", __func__, j, value.intval);
-					if (value.intval >= 0) {
-						ret = value.intval;
-
-#if defined(CONFIG_DUAL_BATTERY)
-						value.intval = SEC_DUAL_BATTERY_MAIN;
-						psy_do_property(battery->pdata->dual_battery_name, get,
-								POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
-						value.intval = SEC_DUAL_BATTERY_SUB;
-						psy_do_property(battery->pdata->dual_battery_name, get,
-								POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
-#endif
-						break;
-					}
-				}
-
-				if (battery->is_jig_on || battery->factory_mode || factory_mode) {
-					value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_OFF;
-					psy_do_property(battery->pdata->fgsrc_switch_name, set,
-							POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
-				}
-			} else { 
-				int k, ocv, ocv_data[10];
-
-				value.intval = 0;
-				psy_do_property(battery->pdata->fgsrc_switch_name, set,
-						POWER_SUPPLY_PROP_ENERGY_NOW, value);
-
-				for (j = 0; j < 10; j++) {
-					mdelay(175);
-					psy_do_property(battery->pdata->fuelgauge_name, get,
-							POWER_SUPPLY_PROP_VOLTAGE_NOW, value);
-					ocv_data[j] = value.intval;
-					pr_info("%s: ocv_data[%d]: %d\n", __func__, j, ocv_data[j]);
-				}
-#if defined(CONFIG_DUAL_BATTERY)
-				value.intval = SEC_DUAL_BATTERY_MAIN;
-				psy_do_property(battery->pdata->dual_battery_name, get,
-					POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
-				value.intval = SEC_DUAL_BATTERY_SUB;
-				psy_do_property(battery->pdata->dual_battery_name, get,
-					POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
-#endif
-
+			if (battery->is_jig_on || battery->factory_mode || factory_mode)
 				value.intval = 1;
-				psy_do_property(battery->pdata->fgsrc_switch_name, set,
-						POWER_SUPPLY_PROP_ENERGY_NOW, value);
-
-				for (j = 1; j < 10; j++) {
-					ocv = ocv_data[j];
-					k = j;
-					while (k > 0 && ocv_data[k-1] > ocv) {
-						ocv_data[k] = ocv_data[k-1];
-						k--;
-					}
-					ocv_data[k] = ocv;
-				}
-				ocv = 0;
-				for (j = 2; j < 8; j++) {
-					ocv += ocv_data[j];
-				}
-				ret = ocv / 6;
-			}
+			
+			psy_do_property(battery->pdata->fuelgauge_name, get,
+						POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE, value);
+			ret = value.intval;
 		} else {
 #if defined(CONFIG_FUELGAUGE_SM5705)
 			psy_do_property(battery->pdata->fuelgauge_name, get,
@@ -2228,6 +2156,9 @@ ssize_t sec_bat_store_attrs(
 			if (x >= 0 && x <= 100) {
 				dev_info(battery->dev, "%s: batt_asoc(%d)\n", __func__, x);
 				battery->batt_asoc = x;
+#if defined(CONFIG_BATTERY_CISD)
+				battery->cisd.data[CISD_DATA_ASOC] = x;
+#endif
 				sec_bat_check_battery_health(battery);
 			}
 			ret = count;
@@ -2267,35 +2198,42 @@ ssize_t sec_bat_store_attrs(
 		break;
 	case WC_CONTROL:
 		if (sscanf(buf, "%10d\n", &x) == 1) {
-			if (battery->pdata->wpc_en) {
-				if (x == 0) {
-					mutex_lock(&battery->wclock);
-					battery->wc_enable = false;
-					battery->wc_enable_cnt = 0;
-					value.intval = 0;
-					psy_do_property(battery->pdata->wireless_charger_name, set,
-						POWER_SUPPLY_EXT_PROP_WC_CONTROL, value);
-					if (battery->pdata->wpc_en)
-						gpio_direction_output(battery->pdata->wpc_en, 1);
-					pr_info("%s: WC CONTROL: Disable", __func__);
-					mutex_unlock(&battery->wclock);
-				} else if (x == 1) {
-					mutex_lock(&battery->wclock);
-					battery->wc_enable = true;
-					battery->wc_enable_cnt = 0;
-					value.intval = 1;
-					psy_do_property(battery->pdata->wireless_charger_name, set,
-						POWER_SUPPLY_EXT_PROP_WC_CONTROL, value);
-					if (battery->pdata->wpc_en)
-						gpio_direction_output(battery->pdata->wpc_en, 0);
-					pr_info("%s: WC CONTROL: Enable", __func__);
-					mutex_unlock(&battery->wclock);
-				} else {
-					dev_info(battery->dev,
-						"%s: WC CONTROL unknown command\n",
-						__func__);
-					return -EINVAL;
-				}
+			char wpc_en_status[2];
+	
+			wpc_en_status[0] = WPC_EN_SYSFS;
+			if (x == 0) {
+				mutex_lock(&battery->wclock);
+				battery->wc_enable = false;
+				battery->wc_enable_cnt = 0;
+				value.intval = 0;
+				psy_do_property(battery->pdata->wireless_charger_name, set,
+					POWER_SUPPLY_EXT_PROP_WC_CONTROL, value);
+	
+				wpc_en_status[1] = false;
+				value.strval= wpc_en_status;
+				psy_do_property(battery->pdata->wireless_charger_name, set,
+					POWER_SUPPLY_EXT_PROP_WPC_EN, value);
+				pr_info("%s: WC CONTROL: Disable\n", __func__);
+				mutex_unlock(&battery->wclock);
+			} else if (x == 1) {
+				mutex_lock(&battery->wclock);
+				battery->wc_enable = true;
+				battery->wc_enable_cnt = 0;
+				value.intval = 1;
+				psy_do_property(battery->pdata->wireless_charger_name, set,
+					POWER_SUPPLY_EXT_PROP_WC_CONTROL, value);
+	
+				wpc_en_status[1] = true;
+				value.strval= wpc_en_status;
+				psy_do_property(battery->pdata->wireless_charger_name, set,
+					POWER_SUPPLY_EXT_PROP_WPC_EN, value);
+				pr_info("%s: WC CONTROL: Enable\n", __func__);
+				mutex_unlock(&battery->wclock);
+			} else {
+				dev_info(battery->dev,
+					"%s: WC CONTROL unknown command\n",
+					__func__);
+				return -EINVAL;
 			}
 			ret = count;
 		}
@@ -3735,9 +3673,21 @@ ssize_t sec_bat_store_attrs(
 			if(battery->pdata->sub_bat_enb_gpio) {			
 				pr_info("%s sub battery enb = %d\n", __func__, x);
 				if(x == 0) {
+					int need_delay = 0;
+
+					need_delay = gpio_get_value(battery->pdata->sub_bat_enb_gpio);
 					gpio_direction_output(battery->pdata->sub_bat_enb_gpio, 0);
+					if (need_delay)
+						msleep(50);
+					
+					value.intval = SEC_DUAL_BATTERY_SUB;
+					psy_do_property(battery->pdata->dual_battery_name, get,
+						POWER_SUPPLY_PROP_VOLTAGE_AVG, value);
+					if (value.intval == 0)
+						psy_do_property(battery->pdata->sub_limiter_name, set,
+							POWER_SUPPLY_EXT_PROP_IC_RESET, value);
 				} else if(x == 1) {
-					gpio_direction_output(battery->pdata->sub_bat_enb_gpio, 1);			
+					gpio_direction_output(battery->pdata->sub_bat_enb_gpio, 1);
 				}
 				pr_info("%s main enb = %d, sub enb = %d\n",
 					__func__,
@@ -3946,7 +3896,7 @@ ssize_t sec_bat_store_attrs(
 
 			newprop->name = kstrdup(battery->get_dt_str, GFP_KERNEL);
 			newprop->value = kstrdup(v, GFP_KERNEL);
-			dev_info(battery->dev,"UPDATE_DT_STR: %s, len: %d\n", newprop->value, strlen(v));
+			dev_info(battery->dev,"UPDATE_DT_STR: %s, len: %d\n", newprop->value, (int)strlen(v));
 			newprop->length = strlen(v)+1;
 			if (of_update_property(np, newprop))
 				dev_info(battery->dev,"UPDATE_DT_STR: update failed\n");

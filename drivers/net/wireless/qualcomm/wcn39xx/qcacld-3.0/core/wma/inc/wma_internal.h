@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -204,6 +204,42 @@ void wma_process_roam_synch_fail(WMA_HANDLE handle,
 int wma_roam_synch_event_handler(void *handle, uint8_t *event,
 					uint32_t len);
 
+#ifdef WLAN_FEATURE_FIPS
+/**
+ * wma_register_pmkid_req_event_handler() - Register pmkid request event handler
+ * @wma_handle: wma_handle
+ *
+ * This function register pmkid request event handler.
+ */
+void wma_register_pmkid_req_event_handler(tp_wma_handle wma_handle);
+
+/**
+ * wma_roam_pmkid_request_event_handler() - Handles roam pmkid request event
+ * @handle: wma_handle
+ * @event: pmkid request event data pointer
+ * @len: length of the data
+ *
+ * Handles pmkid request event from firmware which is triggered after roam
+ * candidate selection.
+ */
+int wma_roam_pmkid_request_event_handler(void *handle,
+					 uint8_t *event,
+					 uint32_t len);
+#else
+static inline void
+wma_register_pmkid_req_event_handler(tp_wma_handle wma_handle)
+{
+}
+
+static inline int
+wma_roam_pmkid_request_event_handler(void *handle,
+				     uint8_t *event,
+				     uint32_t len)
+{
+	return 0;
+}
+#endif /* WLAN_FEATURE_FIPS */
+
 /**
  * wma_roam_auth_offload_event_handler() - Handle LFR-3.0 Roam authentication
  * offload event.
@@ -216,6 +252,22 @@ int wma_roam_synch_event_handler(void *handle, uint8_t *event,
  */
 int wma_roam_auth_offload_event_handler(WMA_HANDLE handle, uint8_t *event,
 					uint32_t len);
+
+/**
+ * wma_roam_stats_event_handler() - Handle the WMI_ROAM_STATS_EVENTID
+ * from target
+ * @handle: wma_handle
+ * @event:  roam debug stats event data pointer
+ * @len: length of the data
+ *
+ * This function handles the roam debug stats from the target and logs it
+ * to kmsg. This WMI_ROAM_STATS_EVENTID event is received whenever roam
+ * scan trigger happens or when neighbor report is sent by the firmware.
+ *
+ * Return: Success or Failure status
+ */
+int wma_roam_stats_event_handler(WMA_HANDLE handle, uint8_t *event,
+				 uint32_t len);
 
 /**
  * wma_roam_synch_frame_event_handler() - roam synch frame event handler
@@ -236,6 +288,21 @@ static inline int wma_mlme_roam_synch_event_handler_cb(void *handle,
 {
 	return 0;
 }
+
+static inline int
+wma_roam_pmkid_request_event_handler(void *handle,
+				     uint8_t *event,
+				     uint32_t len)
+{
+	return 0;
+}
+
+static inline int
+wma_roam_stats_event_handler(WMA_HANDLE handle, uint8_t *event,
+			     uint32_t len)
+{
+	return 0;
+}
 #endif
 
 /**
@@ -252,10 +319,44 @@ QDF_STATUS wma_update_channel_list(WMA_HANDLE handle,
 				   tSirUpdateChanList *chan_list);
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
+/**
+ * wma_roam_scan_chan_event_handler() - roam scan ch list event handler
+ * @handle: wma handle
+ * @event: pointer to event buf
+ * @len: length of event
+ *
+ * Return: Success or Failure status
+ */
+int wma_roam_scan_chan_event_handler(WMA_HANDLE handle, uint8_t *event,
+				     uint32_t len);
+
+/**
+ * wma_get_roam_scan_ch() - API to get roam scan ch list from fw
+ * @wma: wma handle
+ * @vdev_id: vdev id
+ *
+ * Return: none
+ */
+QDF_STATUS wma_get_roam_scan_ch(tp_wma_handle wma,
+				uint8_t vdev_id);
+
 QDF_STATUS wma_roam_scan_fill_self_caps(tp_wma_handle wma_handle,
 					roam_offload_param *
 					roam_offload_params,
 					tSirRoamOffloadScanReq *roam_req);
+#else
+static inline QDF_STATUS wma_get_roam_scan_ch(tp_wma_handle wma,
+					      uint8_t vdev_id)
+{
+	return QDF_STATUS_E_FAILURE;
+}
+
+static inline int
+wma_roam_scan_chan_event_handler(WMA_HANDLE handle, uint8_t *event,
+				 uint32_t len)
+{
+	return -EINVAL;
+}
 #endif
 
 QDF_STATUS wma_roam_scan_offload_mode(tp_wma_handle wma_handle,
@@ -1517,4 +1618,15 @@ QDF_STATUS wma_set_roam_triggers(tp_wma_handle wma_handle,
  */
 int wma_get_ani_level_evt_handler(void *handle, uint8_t *event_buf,
 				  uint32_t len);
+
+/**
+ * wma_delete_sta_req() - process delete sta request from UMAC
+ * @wma: wma handle
+ * @del_sta: delete sta params
+ * @wait_for_response: Wait for response from firmware
+ *
+ * Return: none
+ */
+void wma_delete_sta_req(tp_wma_handle wma, tpDeleteStaParams del_sta,
+			bool wait_for_response);
 #endif

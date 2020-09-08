@@ -33,23 +33,23 @@
 #endif
 
 struct cam_sensor_i2c_reg_setting load_otp_setfile = {
-	load_sensor_otp_setfile_reg, sizeof(load_sensor_otp_setfile_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_WORD, CAMERA_SENSOR_I2C_TYPE_BYTE, 50
+	load_sensor_otp_setfile_reg, sizeof(load_sensor_otp_setfile_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_BYTE, CAMERA_SENSOR_I2C_TYPE_BYTE, 50
 };
 
 struct cam_sensor_i2c_reg_setting init_read_otp = {
-	init_read_sensor_otp_reg, sizeof(init_read_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_WORD, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
+	init_read_sensor_otp_reg, sizeof(init_read_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_BYTE, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
 };
 
 struct cam_sensor_i2c_reg_setting finish_read_otp = {
-	finish_read_sensor_otp_reg, sizeof(finish_read_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_WORD, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
+	finish_read_sensor_otp_reg, sizeof(finish_read_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_BYTE, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
 };
 
 struct cam_sensor_i2c_reg_setting init_write_otp = {
-	init_write_sensor_otp_reg, sizeof(init_write_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_WORD, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
+	init_write_sensor_otp_reg, sizeof(init_write_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_BYTE, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
 };
 
 struct cam_sensor_i2c_reg_setting finish_write_otp = {
-	finish_write_sensor_otp_reg, sizeof(finish_write_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_WORD, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
+	finish_write_sensor_otp_reg, sizeof(finish_write_sensor_otp_reg)/sizeof(struct cam_sensor_i2c_reg_array), CAMERA_SENSOR_I2C_TYPE_BYTE, CAMERA_SENSOR_I2C_TYPE_BYTE, 10
 };
 
 static int cam_otp_read_memory(struct cam_eeprom_ctrl_t *e_ctrl, struct cam_eeprom_memory_block_t *block);
@@ -677,7 +677,7 @@ static int cam_eeprom_update_module_info(struct cam_eeprom_ctrl_t *e_ctrl)
 			memcpy(rear_dual_cal, &e_ctrl->cal_data.mapdata[FROM_REAR_DUAL_CAL_ADDR], FROM_REAR_DUAL_CAL_SIZE);
 			rear_dual_cal[FROM_REAR_DUAL_CAL_SIZE] = '\0';
 			CAM_INFO(CAM_EEPROM, "rear dual cal = %s", rear_dual_cal);
-#if defined(CONFIG_SEC_A71_PROJECT)
+#if defined(CONFIG_SEC_A71_PROJECT) || defined(CONFIG_SEC_M51_PROJECT)
 			if(e_ctrl->cal_data.mapdata[FROM_REAR3_DUAL_CAL_ADDR] == 0xFF || e_ctrl->cal_data.mapdata[FROM_REAR3_DUAL_CAL_ADDR] == 0x00)
 				snprintf(rear3_project_cal_type, PROJECT_CAL_TYPE_MAX_SIZE, "NONE");
 			else
@@ -741,6 +741,10 @@ static int cam_eeprom_update_module_info(struct cam_eeprom_ctrl_t *e_ctrl)
 		/* rear3 manufacturer info */
 			//memcpy(rear3_fw_ver, &e_ctrl->cal_data.mapdata[REAR3_MODULE_FW_VERSION], FROM_MODULE_FW_INFO_SIZE);
 			//rear3_fw_ver[FROM_MODULE_FW_INFO_SIZE] = '\0';
+#if defined(CONFIG_SAMSUNG_CAMERA_OTP)
+			memcpy(rear3_fw_ver, &e_ctrl->cal_data.mapdata[SENSOR_OTP_SENSOR_MODULE_FW_OFFSET], FROM_MODULE_FW_INFO_SIZE);
+			rear3_fw_ver[FROM_MODULE_FW_INFO_SIZE] = '\0';
+#endif
 			CAM_DBG(CAM_EEPROM,
 				"rear manufacturer info = %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
 				rear3_fw_ver[0], rear3_fw_ver[1], rear3_fw_ver[2], rear3_fw_ver[3], rear3_fw_ver[4],
@@ -2251,10 +2255,10 @@ static int cam_otp_read_memory(struct cam_eeprom_ctrl_t *e_ctrl,
     }
 
     msleep(10);
-    for (j = 0; j < block->num_map; j++)
+    for (j = 1; j < block->num_map; j++)
     {
         read_size = emap[j].mem.valid_size;
-        memptr = block->mapdata + addr;
+        memptr = block->mapdata + emap[j].mem.addr;
         addr = emap[j].mem.addr + SENSOR_OTP_PAGE_START_REGISTER;
 
         CAM_DBG(CAM_EEPROM, "[%d / %d] memptr = %pK, emap[j].mem.addr = 0x%X, size = 0x%X, subdev = %d read_size=%u device_type = %d",
@@ -2275,7 +2279,7 @@ static int cam_otp_read_memory(struct cam_eeprom_ctrl_t *e_ctrl,
         {
             // OTP (12:8)
             i2c_reg_array.reg_addr = 0x69;
-            i2c_reg_array.reg_data = (addr&(0x1F00))>>8;
+            i2c_reg_array.reg_data = ((addr*8)&(0x1F00))>>8;
             i2c_reg_settings.reg_setting = &i2c_reg_array;
 
             rc = camera_io_dev_write(&(e_ctrl->io_master_info), &i2c_reg_settings);
@@ -2286,7 +2290,7 @@ static int cam_otp_read_memory(struct cam_eeprom_ctrl_t *e_ctrl,
 
             // OTP (7:0)
             i2c_reg_array.reg_addr = 0x6A;
-            i2c_reg_array.reg_data = (addr&(0x00FF));
+            i2c_reg_array.reg_data = ((addr*8)&(0x00FF));
             i2c_reg_settings.reg_setting = &i2c_reg_array;
 
             rc = camera_io_dev_write(&(e_ctrl->io_master_info), &i2c_reg_settings);

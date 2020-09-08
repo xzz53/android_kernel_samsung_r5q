@@ -204,8 +204,6 @@ obj-$(CONFIG_GNSS_SIRF)		+= gnsssirf/
 
 ifeq ($(CONFIG_BATTERY_SAMSUNG_V2), y)
 	obj-$(CONFIG_BATTERY_SAMSUNG)	+= battery_v2/
-else
-	obj-$(CONFIG_BATTERY_SAMSUNG)	+= battery/
 endif
 
 # mobicore
@@ -234,3 +232,9 @@ ifeq ($(CONFIG_GATOR), y)
 endif
 
 obj-y				+= kperfmon/
+
+#TZIC
+obj-y  += security/samsung/tzic/
+
+# SPU signature verify
+obj-$(CONFIG_SPU_VERIFY) += spu_verify/

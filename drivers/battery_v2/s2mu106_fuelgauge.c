@@ -334,7 +334,7 @@ static void s2mu106_reset_fg(struct s2mu106_fuelgauge_data *fuelgauge)
 
 	/* Dumpdone. Re-calculate SOC */
 	s2mu106_write_and_verify_reg_byte(fuelgauge->i2c, 0x1E, 0x0F);
-	mdelay(300);
+	msleep(300);
 
 	/* If it was voltage mode, recover it */
 	if (fuelgauge->mode == HIGH_SOC_VOLTAGE_MODE) {
@@ -653,7 +653,7 @@ static void s2mu106_temperature_compensation(struct s2mu106_fuelgauge_data *fuel
 			if (fuelgauge->temperature >= fuelgauge->low_temp_limit ||
 				((fuelgauge->temperature < fuelgauge->low_temp_limit) && (data[1] != 0))) {
 				fuelgauge->soc_r = soc_map;
-				pr_info("%s: When Initial Mapping, UI SOC = soc_r = soc_map\n", __func__, fuelgauge->soc_r);
+				pr_info("%s: When Initial Mapping, UI SOC = soc_r = soc_map(%d)\n", __func__, fuelgauge->soc_r);
 				fuelgauge->ui_soc = fuelgauge->soc_r / 100;
 				fuelgauge->capacity_old = fuelgauge->ui_soc;
 			}
@@ -729,7 +729,7 @@ static int s2mu106_get_cycle(struct s2mu106_fuelgauge_data *fuelgauge)
 
 	s2mu106_write_and_verify_reg_byte(fuelgauge->i2c, S2MU106_REG_MONOUT_SEL, 0x27);
 
-	mdelay(50);
+	msleep(50);
 
 	if (s2mu106_read_reg(fuelgauge->i2c, S2MU106_REG_MONOUT, data) < 0)
 		goto err;
@@ -1274,7 +1274,7 @@ batcap_learn_init:
 
 				/* Dumpdone. Re-calculate SOC */
 				s2mu106_write_and_verify_reg_byte(fuelgauge->i2c, 0x1E, 0x0F);
-				mdelay(300);
+				msleep(300);
 
 				s2mu106_read_reg_byte(fuelgauge->i2c, 0x29, &temp);
 				temp &= 0xFE;
@@ -1502,7 +1502,7 @@ static int s2mu106_get_avgvbat(struct s2mu106_fuelgauge_data *fuelgauge)
 
 	s2mu106_write_and_verify_reg_byte(fuelgauge->i2c, S2MU106_REG_MONOUT_SEL, 0x16);
 
-	mdelay(50);
+	msleep(50);
 
 	if (s2mu106_read_reg(fuelgauge->i2c, S2MU106_REG_MONOUT, data) < 0)
 		goto err;
@@ -1744,6 +1744,7 @@ static int s2mu106_fg_get_property(struct power_supply *psy,
 {
 	struct s2mu106_fuelgauge_data *fuelgauge =
 					power_supply_get_drvdata(psy);
+	enum power_supply_ext_property ext_psp = (enum power_supply_ext_property) psp;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
@@ -1912,6 +1913,30 @@ static int s2mu106_fg_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
 		val->intval = fuelgauge->pdata->capacity_full * fuelgauge->raw_capacity;
 		break;
+	case POWER_SUPPLY_PROP_MAX ... POWER_SUPPLY_EXT_PROP_MAX:
+		switch (ext_psp) {
+		case POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE:
+			{
+				int jig_status = val->intval;
+				union power_supply_propval value = {0, };
+
+				value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_ON;
+				psy_do_property("s2mu106-fuelgauge", set,
+						POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
+
+				val->intval = s2mu106_get_vbat(fuelgauge);
+
+				if (jig_status) {
+					value.intval = SEC_BAT_INBAT_FGSRC_SWITCHING_OFF;
+					psy_do_property("s2mu106-fuelgauge", set,
+							POWER_SUPPLY_EXT_PROP_INBAT_VOLTAGE_FGSRC_SWITCHING, value);
+				}
+			}
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -1983,7 +2008,7 @@ static int s2mu106_fg_set_property(struct power_supply *psy,
 				if ((val->intval == SEC_BAT_INBAT_FGSRC_SWITCHING_ON) ||
 					(val->intval == SEC_BAT_FGSRC_SWITCHING_ON)) {
 					s2mu106_fg_set_sys_voltage(fuelgauge, 0);
-					mdelay(1000);
+					msleep(1000);
 					if (val->intval == SEC_BAT_INBAT_FGSRC_SWITCHING_ON)
 						s2mu106_restart_gauging(fuelgauge);
 					s2mu106_fg_reset_capacity_by_jig_connection(fuelgauge);
@@ -1991,7 +2016,7 @@ static int s2mu106_fg_set_property(struct power_supply *psy,
 				} else if ((val->intval == SEC_BAT_INBAT_FGSRC_SWITCHING_OFF) ||
 					(val->intval == SEC_BAT_FGSRC_SWITCHING_OFF)) {
 					s2mu106_fg_set_sys_voltage(fuelgauge, 1);
-					mdelay(1000);
+					msleep(1000);
 					if (val->intval == SEC_BAT_INBAT_FGSRC_SWITCHING_OFF)
 						s2mu106_restart_gauging(fuelgauge);
 					s2mu106_fg_reset_capacity_by_jig_connection(fuelgauge);

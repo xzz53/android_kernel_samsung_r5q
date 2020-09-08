@@ -25,6 +25,7 @@
 //#define SENSOR_OTP_MODULE_ID_SIZE				0x0010
 #define SENSOR_OTP_SENSOR_ID_OFFSET				0x0090
 //#define SENSOR_OTP_SENSOR_ID_SIZE				0x0010
+#define SENSOR_OTP_SENSOR_MODULE_FW_OFFSET		0x0010
 
 /*============== Load setfile =====================*/
 #if 0

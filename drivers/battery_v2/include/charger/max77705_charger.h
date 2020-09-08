@@ -320,7 +320,12 @@ ssize_t max77705_chg_store_attrs(struct device *dev,
 
 #define REDUCE_CURRENT_STEP						100
 #define MINIMUM_INPUT_CURRENT					300
+/* for VZW support */
+#if defined(CONFIG_TABLET_MODEL_CONCEPT) && !defined(CONFIG_SEC_FACTORY)
+#define SLOW_CHARGING_CURRENT_STANDARD          1000
+#else
 #define SLOW_CHARGING_CURRENT_STANDARD          400
+#endif
 
 #define WC_CURRENT_STEP		100
 #define WC_CURRENT_START	480

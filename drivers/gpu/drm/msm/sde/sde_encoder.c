@@ -2283,12 +2283,7 @@ static void sde_encoder_input_event_handler(struct input_handle *handle,
 	struct msm_drm_thread *disp_thread = NULL;
 	struct msm_drm_private *priv = NULL;
 #if defined(CONFIG_DISPLAY_SAMSUNG)
-	struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
-
-	if (ss_is_panel_off(vdd)) {
-		SDE_ERROR("invalid call during power off\n");
-		return;
-	}
+	struct samsung_display_driver_data *vdd = NULL;
 #endif
 
 	if (!handle || !handle->handler || !handle->handler->private) {
@@ -2304,6 +2299,20 @@ static void sde_encoder_input_event_handler(struct input_handle *handle,
 
 	priv = drm_enc->dev->dev_private;
 	sde_enc = to_sde_encoder_virt(drm_enc);
+
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	if (!sde_enc->crtc) {
+		SDE_ERROR("invalid crtc\n");
+		return;
+	}
+	SDE_DEBUG("sde_enc->crtc->index %d \n", sde_enc->crtc->index);
+	vdd = ss_get_vdd(sde_enc->crtc->index);
+	if (ss_is_panel_off(vdd)) {
+		SDE_ERROR("invalid call during power off\n");
+		return;
+	}
+#endif
+
 	if (!sde_enc->crtc || (sde_enc->crtc->index
 			>= ARRAY_SIZE(priv->disp_thread))) {
 		SDE_DEBUG_ENC(sde_enc,
@@ -3043,12 +3052,12 @@ static int _sde_encoder_input_handler_register(
 	int rc = 0;
 
 #if defined(CONFIG_DISPLAY_SAMSUNG)
-	static bool input_handler_registered = false;
+        static bool input_handler_registered = false;
 
-	if (input_handler_registered)
-		return rc;
-	else
-		input_handler_registered = true;
+        if (input_handler_registered)
+                return rc;
+        else
+                input_handler_registered = true;
 #endif
 
 	rc = input_register_handler(input_handler);

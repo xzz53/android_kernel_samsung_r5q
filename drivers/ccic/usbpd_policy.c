@@ -1103,6 +1103,7 @@ policy_state usbpd_policy_snk_select_capability(struct policy_data *policy)
 	int data_role = 0;
 	long long ms = 0;
 	int retry = 0;
+	data_obj_type *obj;
 
 	/**********************************************
 	Actions on entry:
@@ -1125,6 +1126,13 @@ policy_state usbpd_policy_snk_select_capability(struct policy_data *policy)
 
 	/* Select PDO */
 	policy->tx_data_obj[0] = usbpd_manager_select_capability(pd_data);
+
+	/* Charger W/A */
+	obj = &policy->tx_data_obj[0];
+	if (obj->request_data_object.object_position == 1)
+		pd_data->phy_ops.set_chg_lv_mode(pd_data, 5);
+	else if (obj->request_data_object.object_position == 2)
+		pd_data->phy_ops.set_chg_lv_mode(pd_data, 9);
 
 	/* Clear Interrupt Status */
 	pd_data->phy_ops.get_status(pd_data, MSG_GOODCRC);
@@ -1871,7 +1879,7 @@ policy_state usbpd_policy_drs_dfp_ufp_accept_dr_swap(struct policy_data *policy)
 	**********************************************/
 
 	dev_info(pd_data->dev, "%s\n", __func__);
-	msleep(3);
+	usleep_range(3000, 3010);
 
 	pd_data->phy_ops.get_power_role(pd_data, &power_role);
 
@@ -3899,7 +3907,7 @@ policy_state usbpd_policy_dfp_vdm_svids_request(struct policy_data *policy)
 	struct usbpd_data *pd_data = policy_to_usbpd(policy);
 	int power_role = 0;
 	int ret = PE_DFP_VDM_SVIDs_NAKed;
-	long long ms = 0;	
+	long long ms = 0;
 
 	/**********************************************
 	Actions on entry:

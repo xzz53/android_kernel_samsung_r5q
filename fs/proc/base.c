@@ -2963,6 +2963,9 @@ static int do_io_accounting(struct task_struct *task, struct seq_file *m, int wh
 		   "syscw: %llu\n"
 		   "read_bytes: %llu\n"
 		   "write_bytes: %llu\n"
+#ifdef CONFIG_SUBMIT_BH_IO_ACCOUNTING_DEBUG
+		   "submit_bh_write_bytes: %llu\n"
+#endif
 		   "cancelled_write_bytes: %llu\n",
 		   (unsigned long long)acct.rchar,
 		   (unsigned long long)acct.wchar,
@@ -2970,6 +2973,9 @@ static int do_io_accounting(struct task_struct *task, struct seq_file *m, int wh
 		   (unsigned long long)acct.syscw,
 		   (unsigned long long)acct.read_bytes,
 		   (unsigned long long)acct.write_bytes,
+#ifdef CONFIG_SUBMIT_BH_IO_ACCOUNTING_DEBUG
+		   (unsigned long long)acct.submit_bh_write_bytes,
+#endif
 		   (unsigned long long)acct.cancelled_write_bytes);
 	result = 0;
 
